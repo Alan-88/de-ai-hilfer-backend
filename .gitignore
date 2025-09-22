@@ -1,0 +1,20 @@
+# 环境变量文件 (包含密码！)
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 数据库文件 (云端有自己的数据库，这个不需要上传)
+word_entries.db
+word_entries.db.backup
+temp_import_validation.db
+
+# macOS 系统文件
+.DS_Store
+
+# IDE 配置文件 (如果使用 VSCode)
+.vscode/
+
+# 其他文件
+run_server
