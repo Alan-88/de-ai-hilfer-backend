@@ -2,6 +2,7 @@ from collections import deque
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.endpoints import router as api_router_v1
 from app.core.llm_service import llm_router_instance
@@ -18,7 +19,6 @@ async def lifespan(app: FastAPI):
     load_dotenv()
     
     # 初始化 LLMRouter 单例
-    # 这个实例将在整个应用的生命周期中存在
     llm_router_instance.initialize()
     
     print("--- 正在初始化数据库... ---")
@@ -34,18 +34,32 @@ async def lifespan(app: FastAPI):
     
     # --- 在应用关闭时执行的代码 ---
     print("--- De-AI-Hilfer 正在关闭... ---")
-    # 在这里可以添加清理逻辑，例如关闭数据库连接池等
 
 # 创建 FastAPI 应用实例
 app = FastAPI(
     title="De-AI-Hilfer API",
     description="为个人德语学习生态系统提供核心后端服务。",
-    version="1.1.0",
+    version="1.1.1", # 版本号+1
     lifespan=lifespan,
 )
 
+# 定义允许访问的源列表
+origins = [
+    "http://localhost:5173",  # SvelteKit 开发服务器
+    "http://localhost",
+    # 在未来，你还可以把你的Web应用的正式域名加进来
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"], # 允许所有HTTP方法
+    allow_headers=["*"], # 允许所有HTTP请求头
+)
+
+
 # 包含 v1 版本的 API 路由
-# 所有来自 /api/v1 的请求都将被转发到 api_router_v1 中处理
 app.include_router(api_router_v1, prefix="/api/v1")
 
 # 定义一个根路径，用于健康检查
