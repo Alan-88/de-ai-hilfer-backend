@@ -9,6 +9,7 @@ from typing import Deque, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body, File, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import text
 
 from app.core.state import get_recent_searches 
 from app.core.llm_service import get_llm_router, call_llm_service, get_or_create_knowledge_entry
@@ -517,3 +518,16 @@ def import_database(
             backup_file.file.close()
         if os.path.exists(temp_db_path):
             os.remove(temp_db_path)
+
+@router.get("/status", tags=["Health Check"])
+def get_server_status(db: Session = Depends(get_db)):
+    """
+    检查后端服务和数据库的健康状态。
+    """
+    try:
+        # 执行一个最简单的SQL查询来唤醒或检查数据库
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "db_status": "ok"}
+    except Exception as e:
+        # 如果数据库连接失败，这个接口会报错
+        raise HTTPException(status_code=503, detail=f"Database connection error: {e}")
