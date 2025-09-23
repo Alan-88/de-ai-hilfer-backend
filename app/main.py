@@ -46,7 +46,8 @@ app = FastAPI(
 # 临时添加frp节点，用于开发阶段测试
 frp_url = [
     "http://vip.xg.frp.one",
-    "https://vip.xg.frp.one"
+    "https://vip.xg.frp.one",
+    "vip.xg.frp.one"
 ]
 
 # 定义允许访问的源列表
