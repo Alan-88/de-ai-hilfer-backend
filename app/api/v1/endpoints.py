@@ -5,8 +5,8 @@ import traceback
 import datetime
 import shutil
 import sqlite3
-from typing import Deque, List
-from fastapi import APIRouter, Depends, HTTPException, Body
+from typing import Deque, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Body, File, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 
@@ -450,29 +450,50 @@ def export_database():
     )
 
 @router.post("/database/import", tags=["Management"])
-def import_database(request: DatabaseImportRequest):
+def import_database(
+    request: Optional[DatabaseImportRequest] = None, 
+    backup_file: Optional[UploadFile] = File(None)
+):
     """
-    用用户提供的备份文件恢复整个 SQLite 数据库。
+    【V3 终极兼容版】恢复数据库。
+    - 如果提供了 backup_file (来自Web端的文件上传)，则使用文件流。
+    - 如果提供了 request body (来自Raycast的路径)，则使用文件路径。
     """
-    backup_path = request.file_path
     current_db_path = "word_entries.db"
-    temp_db_path = "temp_import_validation.db"
-
-    # 1. 路径和文件存在性检查
-    if not os.path.exists(backup_path):
-        raise HTTPException(status_code=404, detail=f"文件未找到: {backup_path}")
-    if not os.path.isfile(backup_path):
-        raise HTTPException(status_code=400, detail="提供的路径不是一个文件。")
+    temp_db_path = f"temp_import_{datetime.datetime.now().timestamp()}.db"
 
     try:
-        # 2. 复制到临时位置进行安全验证
-        shutil.copyfile(backup_path, temp_db_path)
+        # --- 模式一：处理文件上传 (Web 客户端) ---
+        if backup_file:
+            if not backup_file.filename or not backup_file.filename.endswith('.db'):
+                raise HTTPException(status_code=400, detail="请上传一个有效的 .db 数据库备份文件。")
+            
+            # 将上传的文件内容写入临时文件
+            with open(temp_db_path, "wb") as buffer:
+                shutil.copyfileobj(backup_file.file, buffer)
+            
+            source_path = temp_db_path
 
-        # 3. 验证临时文件
+        # --- 模式二：处理文件路径 (Raycast 客户端) ---
+        elif request and request.file_path:
+            backup_path = request.file_path
+            if not os.path.exists(backup_path):
+                raise HTTPException(status_code=404, detail=f"文件未找到: {backup_path}")
+            if not os.path.isfile(backup_path):
+                raise HTTPException(status_code=400, detail="提供的路径不是一个文件。")
+            
+            # 为了安全，我们先复制再操作
+            shutil.copyfile(backup_path, temp_db_path)
+            source_path = temp_db_path
+        
+        # --- 如果两种模式都没有匹配，则报错 ---
+        else:
+            raise HTTPException(status_code=400, detail="必须提供文件上传或文件路径。")
+
+        # --- 统一的验证和替换逻辑 ---
         try:
-            conn = sqlite3.connect(temp_db_path)
+            conn = sqlite3.connect(source_path)
             cursor = conn.cursor()
-            # 检查核心表是否存在
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('knowledge_entries', 'entry_aliases', 'follow_ups');")
             tables = cursor.fetchall()
             if len(tables) < 3:
@@ -481,19 +502,18 @@ def import_database(request: DatabaseImportRequest):
         except (sqlite3.DatabaseError, ValueError) as e:
             raise HTTPException(status_code=400, detail=f"备份文件验证失败: {e}")
 
-        # 4. 【核心操作】替换数据库文件
-        # 注意：在生产环境中，这里需要关闭所有现有连接。
-        # 对于本地应用，提示用户重启是最安全、最简单的方式。
-        shutil.move(temp_db_path, current_db_path)
-
-        return {"message": "数据库恢复成功！请完全重启 Raycast (通过 Command + Q) 以加载新的知识库。"}
+        shutil.move(source_path, current_db_path)
+        return {"message": "数据库恢复成功！请重启客户端或刷新页面以加载新数据。"}
 
     except Exception as e:
-        # 确保在出错时清理临时文件
         if os.path.exists(temp_db_path):
             os.remove(temp_db_path)
-        raise HTTPException(status_code=500, detail=f"恢复数据库时发生未知错误: {e}")
+        # 重新抛出原始的 HTTPException，或者包装其他的异常
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"恢复数据库时发生未知错误: {str(e)}")
     finally:
-        # 确保在任何情况下都尝试清理临时文件
+        if backup_file:
+            backup_file.file.close()
         if os.path.exists(temp_db_path):
             os.remove(temp_db_path)
