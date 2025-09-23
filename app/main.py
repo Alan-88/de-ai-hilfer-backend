@@ -43,20 +43,16 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 临时添加frp节点，用于开发阶段测试
-frp_url = [
-    "http://vip.xg.frp.one",
-    "https://vip.xg.frp.one",
-    "vip.xg.frp.one"
-]
+web_url = []
 
 # 定义允许访问的源列表
-origins = [
-    "http://localhost:5173",  # SvelteKit 开发服务器
-    "http://localhost",
-    # 在未来，你还可以把你的Web应用的正式域名加进来
-    *frp_url
-]
+# origins = [
+#     "http://localhost:5173",  # SvelteKit 开发服务器
+#     "http://localhost",
+#     # 在未来，你还可以把你的Web应用的正式域名加进来
+#     *web_url,
+# ]
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
