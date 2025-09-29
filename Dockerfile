@@ -11,6 +11,7 @@ COPY requirements.txt .
 # --no-cache-dir: 不缓存包，减小镜像体积
 # --upgrade pip: 升级pip到最新版本
 RUN pip install --no-cache-dir --upgrade pip -r requirements.txt
+RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
 
 # 将项目的所有文件复制到工作目录
 COPY . .

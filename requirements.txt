@@ -12,5 +12,6 @@ ollama
 sqlalchemy
 alembic
 psycopg2-binary
+asyncio
 # **Form Data Handling for File Uploads**
 python-multipart
