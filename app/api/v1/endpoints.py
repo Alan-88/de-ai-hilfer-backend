@@ -5,6 +5,7 @@ import traceback
 import datetime
 import shutil
 import sqlite3
+import asyncio
 from typing import Deque, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body, File, UploadFile
 from fastapi.responses import FileResponse
@@ -39,26 +40,32 @@ router = APIRouter()
 
 def get_preview_from_analysis(analysis: str) -> str:
     """
-    【V3.3 终极健壮版】从完整的Markdown分析中智能提取核心释义作为预览。
+    【V3.4 词性扩展版】从完整的Markdown分析中智能提取核心释义作为预览。
     能够兼容多种可能的格式，并保留词性。
     """
     try:
+        # 【修改】将 'adv.' (副词) 添加到正则表达式中
+        part_of_speech_pattern = r"(v\.|n\.|adj\.|adv\.)"
+
         # 策略 1: 匹配新版格式的列表项, e.g., "* **v.** **释义**"
-        match = re.search(r"\*\s*\*\*(v\.|n\.|adj\.)\*\*\s*\*\*(.*?)\*\*", analysis, re.IGNORECASE)
+        # 使用了上面定义的扩展模式
+        match = re.search(r"\*\s*\*\*" + part_of_speech_pattern + r"\*\*\s*\*\*(.*?)\*\*", analysis, re.IGNORECASE)
         if match:
             pos = match.group(1)  # part of speech
             definition = match.group(2).strip()
             return f"{pos} {definition}"
 
         # 策略 2: 兼容旧格式的表格
-        match = re.search(r"\|\s*\*\*核心释义\s*\(Bedeutung\)\*\*\s*\|\s*\*\*(v\.|n\.|adj\.)\*\*\s*\*\*(.*?)\*\*\s*\|", analysis, re.IGNORECASE)
+        # 同样使用扩展模式
+        match = re.search(r"\|\s*\*\*核心释义\s*\(Bedeutung\)\*\*\s*\|\s*\*\*" + part_of_speech_pattern + r"\*\*\s*\*\*(.*?)\*\*\s*\|", analysis, re.IGNORECASE)
         if match:
             pos = match.group(1)
             definition = match.group(2).strip()
             return f"{pos} {definition}"
         
         # 策略 3: 匹配不带粗体标记的列表项, e.g., "* v. 释义"
-        match = re.search(r"^\s*\*\s*(v\.|n\.|adj\.)\s+(.*)", analysis, re.MULTILINE | re.IGNORECASE)
+        # 同样使用扩展模式
+        match = re.search(r"^\s*\*\s*" + part_of_speech_pattern + r"\s+(.*)", analysis, re.MULTILINE | re.IGNORECASE)
         if match:
             pos = match.group(1)
             definition = match.group(2).strip().split('\n')[0] # 取第一行
@@ -432,92 +439,132 @@ async def intelligent_search(
         raise HTTPException(status_code=500, detail=f"高级查询时发生内部错误: {e}")
     
 @router.get("/database/export", tags=["Management"])
-def export_database():
+async def export_database():
     """
-    导出整个 SQLite 数据库文件作为备份。
+    【V2.0 云数据库版】使用 pg_dump 导出整个 PostgreSQL 数据库作为备份。
     """
-    db_path = "word_entries.db" # 数据库文件相对于项目根目录的路径
-    
-    if not os.path.exists(db_path):
-        raise HTTPException(status_code=404, detail="数据库文件未找到。")
-    
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d")
-    filename = f"de_ai_hilfer_backup_{timestamp}.db"
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise HTTPException(status_code=500, detail="DATABASE_URL 环境变量未设置。")
 
-    return FileResponse(
-        path=db_path,
-        filename=filename, # 指定下载时显示的文件名
-        media_type="application/x-sqlite3" # 指定文件的 MIME 类型
-    )
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    temp_backup_path = f"/tmp/de_ai_hilfer_backup_{timestamp}.sql" # 使用 /tmp 目录存放临时文件
 
-@router.post("/database/import", tags=["Management"])
-def import_database(
-    request: Optional[DatabaseImportRequest] = None, 
-    backup_file: Optional[UploadFile] = File(None)
-):
-    """
-    【V3 终极兼容版】恢复数据库。
-    - 如果提供了 backup_file (来自Web端的文件上传)，则使用文件流。
-    - 如果提供了 request body (来自Raycast的路径)，则使用文件路径。
-    """
-    current_db_path = "word_entries.db"
-    temp_db_path = f"temp_import_{datetime.datetime.now().timestamp()}.db"
+    # 构建 pg_dump 命令
+    # --clean: 在恢复前删除旧的对象
+    # --if-exists: 在 drop 时使用 IF EXISTS 避免错误
+    # -f: 输出到文件
+    command = [
+        "pg_dump",
+        "--clean",
+        "--if-exists",
+        "-d", db_url,
+        "-f", temp_backup_path
+    ]
 
     try:
-        # --- 模式一：处理文件上传 (Web 客户端) ---
+        # 异步执行 pg_dump 命令
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            error_message = stderr.decode().strip()
+            print(f"--- [错误] pg_dump 执行失败: {error_message} ---")
+            raise HTTPException(status_code=500, detail=f"数据库备份失败: {error_message}")
+        
+        # 成功后，返回文件供用户下载
+        return FileResponse(
+            path=temp_backup_path,
+            filename=os.path.basename(temp_backup_path),
+            media_type="application/sql"
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="服务器错误: 'pg_dump' 命令未找到。请确保 PostgreSQL 客户端工具已安装在后端环境中。")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建备份时发生未知错误: {str(e)}")
+    finally:
+        # 无论成功失败，都尝试删除临时文件
+        if os.path.exists(temp_backup_path):
+            os.remove(temp_backup_path)
+
+
+@router.post("/database/import", tags=["Management"])
+async def import_database(
+    request: Optional[DatabaseImportRequest] = Body(None), # 【修正】使用 Body(None) 明确接收 JSON 体
+    backup_file: Optional[UploadFile] = File(None)       # 【修正】同时支持文件上传
+):
+    """
+    【V2.1 终极兼容版】从 .sql 文件恢复 PostgreSQL 数据库。
+    - Web 端: 直接上传 .sql 文件 (backup_file)。
+    - Raycast 端: 传递包含 .sql 文件路径的 JSON (request)。
+    """
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        raise HTTPException(status_code=500, detail="DATABASE_URL 环境变量未设置。")
+
+    timestamp = datetime.datetime.now().timestamp()
+    temp_sql_path = f"/tmp/temp_import_{timestamp}.sql"
+    source_description = "" # 用于日志记录
+
+    try:
+        # --- 【逻辑恢复】模式一：处理文件上传 (Web 客户端) ---
         if backup_file:
-            if not backup_file.filename or not backup_file.filename.endswith('.db'):
-                raise HTTPException(status_code=400, detail="请上传一个有效的 .db 数据库备份文件。")
+            source_description = f"uploaded file '{backup_file.filename}'"
+            if not backup_file.filename or not backup_file.filename.endswith('.sql'):
+                raise HTTPException(status_code=400, detail="请上传一个有效的 .sql 数据库备份文件。")
             
             # 将上传的文件内容写入临时文件
-            with open(temp_db_path, "wb") as buffer:
+            with open(temp_sql_path, "wb") as buffer:
                 shutil.copyfileobj(backup_file.file, buffer)
-            
-            source_path = temp_db_path
 
-        # --- 模式二：处理文件路径 (Raycast 客户端) ---
+        # --- 【逻辑恢复】模式二：处理文件路径 (Raycast 客户端) ---
         elif request and request.file_path:
-            backup_path = request.file_path
-            if not os.path.exists(backup_path):
-                raise HTTPException(status_code=404, detail=f"文件未找到: {backup_path}")
-            if not os.path.isfile(backup_path):
-                raise HTTPException(status_code=400, detail="提供的路径不是一个文件。")
-            
+            source_description = f"file path '{request.file_path}'"
+            if not os.path.exists(request.file_path):
+                raise HTTPException(status_code=404, detail=f"文件未找到: {request.file_path}")
+            if not request.file_path.endswith('.sql'):
+                 raise HTTPException(status_code=400, detail="提供的路径不是一个 .sql 文件。")
+
             # 为了安全，我们先复制再操作
-            shutil.copyfile(backup_path, temp_db_path)
-            source_path = temp_db_path
+            shutil.copyfile(request.file_path, temp_sql_path)
         
         # --- 如果两种模式都没有匹配，则报错 ---
         else:
-            raise HTTPException(status_code=400, detail="必须提供文件上传或文件路径。")
+            raise HTTPException(status_code=400, detail="必须通过文件上传或文件路径提供一个 .sql 备份文件。")
 
-        # --- 统一的验证和替换逻辑 ---
-        try:
-            conn = sqlite3.connect(source_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('knowledge_entries', 'entry_aliases', 'follow_ups');")
-            tables = cursor.fetchall()
-            if len(tables) < 3:
-                raise ValueError("备份文件缺少核心数据表，不是一个有效的备份。")
-            conn.close()
-        except (sqlite3.DatabaseError, ValueError) as e:
-            raise HTTPException(status_code=400, detail=f"备份文件验证失败: {e}")
+        # --- 统一的 psql 执行逻辑 ---
+        print(f"--- [数据库导入] 开始从 {source_description} 恢复...")
+        command = ["psql", "-d", db_url, "-f", temp_sql_path]
+        
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
 
-        shutil.move(source_path, current_db_path)
-        return {"message": "数据库恢复成功！请重启客户端或刷新页面以加载新数据。"}
+        if process.returncode != 0:
+            error_message = stderr.decode().strip()
+            print(f"--- [错误] psql 执行失败: {error_message} ---")
+            raise HTTPException(status_code=500, detail=f"数据库恢复失败: {error_message}")
+            
+        return {"message": f"数据库从 {source_description} 恢复成功！新数据已生效。"}
 
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="服务器错误: 'psql' 命令未找到。请确保 PostgreSQL 客户端工具已安装在后端环境中。")
     except Exception as e:
-        if os.path.exists(temp_db_path):
-            os.remove(temp_db_path)
-        # 重新抛出原始的 HTTPException，或者包装其他的异常
-        if isinstance(e, HTTPException):
+        if isinstance(e, HTTPException): # 直接重新抛出已知的 HTTP 异常
             raise e
         raise HTTPException(status_code=500, detail=f"恢复数据库时发生未知错误: {str(e)}")
     finally:
         if backup_file:
             backup_file.file.close()
-        if os.path.exists(temp_db_path):
-            os.remove(temp_db_path)
+        if os.path.exists(temp_sql_path):
+            os.remove(temp_sql_path)
 
 @router.get("/status", tags=["Health Check"])
 def get_server_status(db: Session = Depends(get_db)):
