@@ -13,5 +13,6 @@ sqlalchemy
 alembic
 psycopg2-binary
 asyncio
+starlette
 # **Form Data Handling for File Uploads**
 python-multipart

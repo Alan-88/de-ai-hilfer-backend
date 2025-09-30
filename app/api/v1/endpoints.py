@@ -6,6 +6,7 @@ import datetime
 import shutil
 import sqlite3
 import asyncio
+from starlette.background import BackgroundTask
 from typing import Deque, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Body, File, UploadFile
 from fastapi.responses import FileResponse
@@ -441,29 +442,19 @@ async def intelligent_search(
 @router.get("/database/export", tags=["Management"])
 async def export_database():
     """
-    【V2.0 云数据库版】使用 pg_dump 导出整个 PostgreSQL 数据库作为备份。
+    【V2.1 健壮版】使用 pg_dump 导出整个 PostgreSQL 数据库作为备份。
+    使用后台任务来确保临时文件在响应发送后被清理。
     """
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise HTTPException(status_code=500, detail="DATABASE_URL 环境变量未设置。")
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    temp_backup_path = f"/tmp/de_ai_hilfer_backup_{timestamp}.sql" # 使用 /tmp 目录存放临时文件
+    temp_backup_path = f"/tmp/de_ai_hilfer_backup_{timestamp}.sql"
 
-    # 构建 pg_dump 命令
-    # --clean: 在恢复前删除旧的对象
-    # --if-exists: 在 drop 时使用 IF EXISTS 避免错误
-    # -f: 输出到文件
-    command = [
-        "pg_dump",
-        "--clean",
-        "--if-exists",
-        "-d", db_url,
-        "-f", temp_backup_path
-    ]
+    command = ["pg_dump", "--clean", "--if-exists", "-d", db_url, "-f", temp_backup_path]
 
     try:
-        # 异步执行 pg_dump 命令
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
@@ -474,22 +465,36 @@ async def export_database():
         if process.returncode != 0:
             error_message = stderr.decode().strip()
             print(f"--- [错误] pg_dump 执行失败: {error_message} ---")
+            # 【改进】如果 pg_dump 失败，也要清理可能创建的空文件
+            if os.path.exists(temp_backup_path):
+                os.remove(temp_backup_path)
             raise HTTPException(status_code=500, detail=f"数据库备份失败: {error_message}")
         
-        # 成功后，返回文件供用户下载
+        # --- 【核心修复】 ---
+        # 1. 定义一个清理函数
+        def cleanup():
+            print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
+            os.remove(temp_backup_path)
+
+        # 2. 将清理函数包装成一个 BackgroundTask
+        cleanup_task = BackgroundTask(cleanup)
+
+        # 3. 将 background task 传递给 FileResponse
         return FileResponse(
             path=temp_backup_path,
             filename=os.path.basename(temp_backup_path),
-            media_type="application/sql"
+            media_type="application/sql",
+            background=cleanup_task  # <-- 在这里传入任务
         )
+
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="服务器错误: 'pg_dump' 命令未找到。请确保 PostgreSQL 客户端工具已安装在后端环境中。")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"创建备份时发生未知错误: {str(e)}")
-    finally:
-        # 无论成功失败，都尝试删除临时文件
+        # 如果在 FileResponse 创建前就发生异常，也需要清理
         if os.path.exists(temp_backup_path):
             os.remove(temp_backup_path)
+        raise HTTPException(status_code=500, detail=f"创建备份时发生未知错误: {str(e)}")
+    # 【修改】移除了 'finally' 块，因为清理逻辑已经交给了 BackgroundTask
 
 
 @router.post("/database/import", tags=["Management"])
