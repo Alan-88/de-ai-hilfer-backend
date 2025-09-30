@@ -41,42 +41,37 @@ router = APIRouter()
 
 def get_preview_from_analysis(analysis: str) -> str:
     """
-    【V3.4 词性扩展版】从完整的Markdown分析中智能提取核心释义作为预览。
-    能够兼容多种可能的格式，并保留词性。
+    【V3.7 纯净版】从完整的Markdown分析中智能提取所有核心释义作为预览。
+    只支持标准的 `* **pos.** **definition**` 格式。
     """
     try:
-        # 【修改】将 'adv.' (副词) 添加到正则表达式中
-        part_of_speech_pattern = r"(v\.|n\.|adj\.|adv\.)"
+        # 1. 首先定位到“核心释义”区域，避免匹配到其他部分
+        bedeutung_match = re.search(r"#### 核心释义 \(Bedeutung\)(.*?)####", analysis, re.DOTALL | re.IGNORECASE)
+        search_area = bedeutung_match.group(1) if bedeutung_match else analysis
 
-        # 策略 1: 匹配新版格式的列表项, e.g., "* **v.** **释义**"
-        # 使用了上面定义的扩展模式
-        match = re.search(r"\*\s*\*\*" + part_of_speech_pattern + r"\*\*\s*\*\*(.*?)\*\*", analysis, re.IGNORECASE)
-        if match:
-            pos = match.group(1)  # part of speech
-            definition = match.group(2).strip()
-            return f"{pos} {definition}"
-
-        # 策略 2: 兼容旧格式的表格
-        # 同样使用扩展模式
-        match = re.search(r"\|\s*\*\*核心释义\s*\(Bedeutung\)\*\*\s*\|\s*\*\*" + part_of_speech_pattern + r"\*\*\s*\*\*(.*?)\*\*\s*\|", analysis, re.IGNORECASE)
-        if match:
-            pos = match.group(1)
-            definition = match.group(2).strip()
-            return f"{pos} {definition}"
+        # 2. 定义词性模式和标准格式的匹配模式
+        pos_pattern = r"([a-z\./]+)\.?" 
+        standard_pattern = r"\*\s*\*\*" + pos_pattern + r"\*\*\s*\*\*(.*?)\*\*"
         
-        # 策略 3: 匹配不带粗体标记的列表项, e.g., "* v. 释义"
-        # 同样使用扩展模式
-        match = re.search(r"^\s*\*\s*" + part_of_speech_pattern + r"\s+(.*)", analysis, re.MULTILINE | re.IGNORECASE)
-        if match:
-            pos = match.group(1)
-            definition = match.group(2).strip().split('\n')[0] # 取第一行
-            return f"{pos} {definition}"
+        # 3. 【核心修改】只使用 re.findall 查找标准格式的匹配项
+        matches = re.findall(standard_pattern, search_area, re.IGNORECASE)
+
+        # 4. 如果找到一个或多个匹配项，则拼接它们
+        if matches:
+            preview_parts = []
+            for pos, definition in matches:
+                # 清理和格式化每个部分
+                clean_pos = pos.strip() + '.' if not pos.strip().endswith('.') else pos.strip()
+                clean_def = definition.strip().split('\n')[0]
+                preview_parts.append(f"{clean_pos} {clean_def}")
+            
+            return "; ".join(preview_parts)
 
     except Exception as e:
         print(f"--- 预览提取时发生轻微错误: {e} ---")
         pass
 
-    # 备用方案：截断文本
+    # 5. 如果标准格式匹配失败，则直接使用备用方案
     fallback_preview = analysis.lstrip('#* /').strip()
     return (fallback_preview[:40] + '...') if len(fallback_preview) > 40 else fallback_preview
 
