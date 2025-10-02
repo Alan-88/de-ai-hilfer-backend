@@ -1,19 +1,20 @@
 import datetime
-import json
 import inspect
-from typing import Dict, List, Callable, Any, Literal, get_type_hints
+import json
+from typing import Any, Callable, Dict, List, Literal, get_type_hints
 
 # 数据库和模型依赖
 from sqlalchemy.orm import joinedload
-from app.db.session import SessionLocal
+
 from app.db import models
+from app.db.session import SessionLocal
 
 from .schemas import InternalTool
-
 
 # ==============================================================================
 # 1. 暴露给 LLM 的工具函数 (Agent-Facing Tools)
 # ==============================================================================
+
 
 def get_current_time() -> str:
     """
@@ -23,7 +24,8 @@ def get_current_time() -> str:
     Returns:
         str: 格式为 'YYYY-MM-DD HH:MM:SS' 的当前日期和时间字符串。
     """
-    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 
 def get_entry_details(query_text: str) -> str:
     """
@@ -39,23 +41,38 @@ def get_entry_details(query_text: str) -> str:
     db = SessionLocal()
     try:
         # 1. 尝试直接作为知识条目原型查找
-        entry = db.query(models.KnowledgeEntry).filter(
-            models.KnowledgeEntry.query_text == query_text
-        ).first()
+        entry = (
+            db.query(models.KnowledgeEntry)
+            .filter(models.KnowledgeEntry.query_text == query_text)
+            .first()
+        )
         if entry:
-            output_data = {"query_text": entry.query_text, "analysis_markdown": entry.analysis_markdown}
-            print(f"--- [Tool: get_entry_details] 成功检索到知识条目 '{query_text}' 的详细信息。")
+            output_data = {
+                "query_text": entry.query_text,
+                "analysis_markdown": entry.analysis_markdown,
+            }
+            print(
+                f"--- [Tool: get_entry_details] 成功检索到知识条目 '{query_text}' 的详细信息。"
+            )
             return json.dumps(output_data, ensure_ascii=False)
 
         # 2. 如果作为原型找不到，尝试作为别名查找
-        alias = db.query(models.EntryAlias).options(
-            joinedload(models.EntryAlias.entry)
-        ).filter(models.EntryAlias.alias_text == query_text).first()
-        
+        alias = (
+            db.query(models.EntryAlias)
+            .options(joinedload(models.EntryAlias.entry))
+            .filter(models.EntryAlias.alias_text == query_text)
+            .first()
+        )
+
         if alias and alias.entry:
             entry = alias.entry
-            output_data = {"query_text": entry.query_text, "analysis_markdown": entry.analysis_markdown}
-            print(f"--- [Tool: get_entry_details] 通过别名 '{query_text}' 成功检索到知识条目 '{entry.query_text}'。")
+            output_data = {
+                "query_text": entry.query_text,
+                "analysis_markdown": entry.analysis_markdown,
+            }
+            print(
+                f"--- [Tool: get_entry_details] 通过别名 '{query_text}' 成功检索到知识条目 '{entry.query_text}'。"
+            )
             return json.dumps(output_data, ensure_ascii=False)
 
         # 3. 如果都找不到
@@ -80,7 +97,7 @@ class ToolManager:
         self.tools: Dict[str, Callable[..., Any]] = {}
         self.internal_tools: List[InternalTool] = []
         self._register_all_tools()
-        self.router = None # 由 LLMRouter 注入
+        self.router = None  # 由 LLMRouter 注入
 
     def _register_all_tools(self):
         """
@@ -93,8 +110,8 @@ class ToolManager:
             self.tools[func_name] = func
 
             docstring = inspect.getdoc(func) or ""
-            lines = docstring.split('\n')
-            
+            lines = docstring.split("\n")
+
             # ... (解析逻辑保持不变)
             index = {}
             for i, line in enumerate(lines):
@@ -103,18 +120,18 @@ class ToolManager:
                 elif line.strip().startswith("Returns:"):
                     index["Returns"] = i
                     break
-            
-            subline = lines[:index.get("Args", index.get("Returns", len(lines)))]
+
+            subline = lines[: index.get("Args", index.get("Returns", len(lines)))]
             description = "\n".join(line.strip() for line in subline).strip()
-            
+
             param_descs = {}
             if "Args" in index:
-                subline = lines[index["Args"]+1:index.get("Returns", len(lines))]
+                subline = lines[index["Args"] + 1 : index.get("Returns", len(lines))]
                 for line in subline:
                     stripped_line = line.strip()
-                    if ':' in stripped_line:
-                        param_name_part, desc = stripped_line.split(':', 1)
-                        param_name = param_name_part.split(' ')[0]
+                    if ":" in stripped_line:
+                        param_name_part, desc = stripped_line.split(":", 1)
+                        param_name = param_name_part.split(" ")[0]
                         param_descs[param_name] = desc.strip()
 
             sig = inspect.signature(func)
@@ -125,25 +142,31 @@ class ToolManager:
                 param_name = param.name
                 param_type = type_hints.get(param_name, str)
                 json_type = "string"
-                if param_type in (int, float): json_type = "number"
-                elif param_type == bool: json_type = "boolean"
-                
+                if param_type in (int, float):
+                    json_type = "number"
+                elif param_type == bool:
+                    json_type = "boolean"
+
                 parameters_schema["properties"][param_name] = {
                     "type": json_type,
-                    "description": param_descs.get(param_name, "")
+                    "description": param_descs.get(param_name, ""),
                 }
-                
+
                 if param.default is inspect.Parameter.empty:
                     parameters_schema["required"].append(param_name)
 
-            self.internal_tools.append(InternalTool(
-                name=func_name,
-                description=description,
-                parameters_schema=parameters_schema,
-                tags=tags
-            ))
-        
-        print(f"--- [ToolManager] 成功从 {len(self.internal_tools)} 个函数自动注册工具。 ---")
+            self.internal_tools.append(
+                InternalTool(
+                    name=func_name,
+                    description=description,
+                    parameters_schema=parameters_schema,
+                    tags=tags,
+                )
+            )
+
+        print(
+            f"--- [ToolManager] 成功从 {len(self.internal_tools)} 个函数自动注册工具。 ---"
+        )
 
     def set_router(self, router):
         self.router = router
@@ -152,34 +175,42 @@ class ToolManager:
     def get_tool(self, tool_name: str) -> Callable[..., Any] | None:
         return self.tools.get(tool_name)
 
-    def pack_tools(self, adapter: Literal["Gemini", "Openai", "Ollama"], tools_to_format: List[InternalTool]) -> Any:
+    def pack_tools(
+        self,
+        adapter: Literal["Gemini", "Openai", "Ollama"],
+        tools_to_format: List[InternalTool],
+    ) -> Any:
         # ... (此函数保持不变)
         if adapter in ["Openai", "Ollama"]:
             specs = []
             for tool in tools_to_format:
-                specs.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool.name,
-                        "description": tool.description,
-                        "parameters": tool.parameters_schema
+                specs.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description,
+                            "parameters": tool.parameters_schema,
+                        },
                     }
-                })
+                )
             return specs
-        
+
         if adapter == "Gemini":
             from google.genai import types
+
             specs = []
             for tool in tools_to_format:
                 specs.append(
                     types.FunctionDeclaration(
                         name=tool.name,
                         description=tool.description,
-                        parameters=tool.parameters_schema
+                        parameters=tool.parameters_schema,
                     )
                 )
             return [types.Tool(function_declarations=specs)] if specs else None
-        
+
         return None
+
 
 tool_manager = ToolManager()

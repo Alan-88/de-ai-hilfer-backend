@@ -1,0 +1,479 @@
+"""
+API服务层：包含业务逻辑和辅助函数
+"""
+
+import json
+import re
+import traceback
+from typing import Deque, Dict, List, Optional
+
+from fastapi import HTTPException
+from sqlalchemy import and_
+from sqlalchemy.orm import Session, joinedload
+
+from ai_adapter.llm_router import LLMRouter
+from app.core.errors import ErrorMessages
+from app.core.llm_service import (
+    call_llm_service,
+    get_or_create_knowledge_entry,
+)
+from app.core.performance import (
+    monitor_performance,
+    record_cache_hit,
+    record_cache_miss,
+)
+from app.db import models
+from app.schemas.dictionary import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    DBSuggestion,
+    FollowUpItem,
+    RecentItem,
+)
+
+# =================================================================================
+# 性能优化：缓存和查询优化
+# =================================================================================
+
+# 全局缓存字典，用于存储预览文本的缓存
+_preview_cache: Dict[str, str] = {}
+_max_cache_size = 1000  # 最大缓存条目数
+
+
+@monitor_performance("get_cached_preview")
+def get_cached_preview(analysis_markdown: str) -> str:
+    """获取缓存的预览文本，如果不存在则计算并缓存"""
+    if analysis_markdown in _preview_cache:
+        record_cache_hit("preview_cache")
+        return _preview_cache[analysis_markdown]
+
+    record_cache_miss("preview_cache")
+
+    # 如果缓存过大，清理一半
+    if len(_preview_cache) > _max_cache_size:
+        keys_to_remove = list(_preview_cache.keys())[: _max_cache_size // 2]
+        for key in keys_to_remove:
+            del _preview_cache[key]
+
+    # 计算并缓存预览
+    preview = get_preview_from_analysis(analysis_markdown)
+    _preview_cache[analysis_markdown] = preview
+    return preview
+
+
+def optimize_query_with_cache(db: Session, query_text: str) -> Optional[models.KnowledgeEntry]:
+    """优化的查询函数，使用更高效的查询方式"""
+    # 使用更高效的查询，避免不必要的joinedload
+    entry = (
+        db.query(models.KnowledgeEntry)
+        .filter(models.KnowledgeEntry.query_text == query_text)
+        .first()
+    )
+
+    if entry:
+        # 只有在需要时才加载follow_ups
+        if hasattr(entry, "_follow_ups_loaded"):
+            return entry
+        # 延迟加载follow_ups
+        db.refresh(entry, ["follow_ups"])
+        entry._follow_ups_loaded = True
+
+    return entry
+
+
+def batch_get_entries_by_ids(db: Session, entry_ids: List[int]) -> Dict[int, models.KnowledgeEntry]:
+    """批量获取条目，减少数据库查询次数"""
+    if not entry_ids:
+        return {}
+
+    entries = db.query(models.KnowledgeEntry).filter(models.KnowledgeEntry.id.in_(entry_ids)).all()
+
+    return {entry.id: entry for entry in entries}
+
+
+# =================================================================================
+# 1. 核心辅助函数 (Helper Functions)
+# =================================================================================
+
+
+def get_preview_from_analysis(analysis: str) -> str:
+    """
+    【V3.7 纯净版】从完整的Markdown分析中智能提取所有核心释义作为预览。
+    只支持标准的 `* **pos.** **definition**` 格式。
+    """
+    try:
+        # 1. 首先定位到"核心释义"区域，避免匹配到其他部分
+        bedeutung_match = re.search(
+            r"#### 核心释义 \(Bedeutung\)(.*?)####", analysis, re.DOTALL | re.IGNORECASE
+        )
+        search_area = bedeutung_match.group(1) if bedeutung_match else analysis
+
+        # 2. 定义词性模式和标准格式的匹配模式
+        pos_pattern = r"([a-z\./]+)\.?"
+        standard_pattern = r"\*\s*\*\*" + pos_pattern + r"\*\*\s*\*\*(.*?)\*\*"
+
+        # 3. 【核心修改】只使用 re.findall 查找标准格式的匹配项
+        matches = re.findall(standard_pattern, search_area, re.IGNORECASE)
+
+        # 4. 如果找到一个或多个匹配项，则拼接它们
+        if matches:
+            preview_parts = []
+            for pos, definition in matches:
+                # 清理和格式化每个部分
+                clean_pos = pos.strip() + "." if not pos.strip().endswith(".") else pos.strip()
+                clean_def = definition.strip().split("\n")[0]
+                preview_parts.append(f"{clean_pos} {clean_def}")
+
+            return "; ".join(preview_parts)
+
+    except Exception as e:
+        print(f"--- {ErrorMessages.PREVIEW_EXTRACTION_ERROR.format(error=e)} ---")
+        pass
+
+    # 5. 如果标准格式匹配失败，则直接使用备用方案
+    fallback_preview = analysis.lstrip("#* /").strip()
+    return (fallback_preview[:40] + "...") if len(fallback_preview) > 40 else fallback_preview
+
+
+def check_exact_cache_match(query: str, db: Session) -> Optional[models.KnowledgeEntry]:
+    """
+    检查精确缓存匹配（知识条目表和别名表）
+    """
+    # 1. 检查知识条目表
+    entry = (
+        db.query(models.KnowledgeEntry)
+        .options(joinedload(models.KnowledgeEntry.follow_ups))
+        .filter(models.KnowledgeEntry.query_text == query)
+        .first()
+    )
+    if entry:
+        return entry
+
+    # 2. 检查别名表
+    alias = (
+        db.query(models.EntryAlias)
+        .options(joinedload(models.EntryAlias.entry).joinedload(models.KnowledgeEntry.follow_ups))
+        .filter(models.EntryAlias.alias_text == query)
+        .first()
+    )
+    if alias and alias.entry:
+        return alias.entry
+
+    return None
+
+
+async def perform_spell_check(query: str, llm_router: LLMRouter) -> tuple[bool, Optional[str]]:
+    """
+    执行拼写检查，返回(是否拼写正确, 建议)
+    """
+    spell_checker_prompt = llm_router.config.spell_checker_prompt
+    response_text = await call_llm_service(llm_router, spell_checker_prompt, query)
+
+    try:
+        spell_data = json.loads(response_text)
+        is_correctly_spelled = spell_data.get("is_correct", True)
+        suggestion = spell_data.get("suggestion")
+        return is_correctly_spelled, suggestion
+    except (json.JSONDecodeError, KeyError):
+        print(f"--- {ErrorMessages.SPELL_CHECK_WARNING.format(query=query)} ---")
+        return True, None
+
+
+async def identify_prototype_word(query: str, llm_router: LLMRouter) -> str:
+    """
+    识别原型单词，返回原型词
+    """
+    identification_prompt = llm_router.config.prototype_identification_prompt
+    prototype_response_text = await call_llm_service(
+        llm_router, identification_prompt, query, use_tools=False
+    )
+
+    prototype_word = query
+    try:
+        cleaned_text = re.search(r"\{.*\}", prototype_response_text, re.DOTALL)
+        prototype_data = json.loads(cleaned_text.group(0) if cleaned_text else "{}")
+        prototype_word = prototype_data.get("prototype", query)
+    except (json.JSONDecodeError, AttributeError):
+        error_msg = ErrorMessages.PROTOTYPE_JSON_ERROR.format(
+            prototype_response_text=prototype_response_text
+        )
+        print(f"--- {error_msg} ---")
+
+    return prototype_word
+
+
+def create_alias_if_needed(query: str, target_word: str, entry_id: int, db: Session) -> None:
+    """
+    如果需要，为查询词创建别名
+    """
+    if query.lower() != target_word.lower():
+        existing_alias = (
+            db.query(models.EntryAlias).filter(models.EntryAlias.alias_text == query).first()
+        )
+        if not existing_alias:
+            print(f"--- [信息] 为 '{query}' 创建指向 '{target_word}' 的别名。")
+            new_alias = models.EntryAlias(alias_text=query, entry_id=entry_id)
+            db.add(new_alias)
+            db.commit()
+
+
+def update_recent_searches(query: str, recent_searches: Deque[str]) -> None:
+    """
+    更新最近搜索列表
+    """
+    if query in recent_searches:
+        recent_searches.remove(query)
+    recent_searches.appendleft(query)
+
+
+# =================================================================================
+# 2. 数据库服务函数 (Database Service Functions)
+# =================================================================================
+
+
+@monitor_performance("get_recent_entries_service")
+def get_recent_entries_service(db: Session, recent_searches: Deque[str]) -> list[RecentItem]:
+    """
+    获取最近成功查询的知识条目列表，包含预览。
+    性能优化：使用批量查询和缓存预览。
+    """
+    if not recent_searches:
+        return []
+
+    # 批量查询所有需要的条目
+    entries = (
+        db.query(models.KnowledgeEntry)
+        .filter(models.KnowledgeEntry.query_text.in_(list(recent_searches)))
+        .all()
+    )
+
+    # 创建查询到条目的映射
+    entry_map = {entry.query_text: entry for entry in entries}
+
+    recent_items = []
+    for query in recent_searches:
+        entry = entry_map.get(query)
+        if entry:
+            # 使用缓存的预览
+            recent_items.append(
+                RecentItem(
+                    query_text=entry.query_text,
+                    preview=get_cached_preview(entry.analysis_markdown),
+                )
+            )
+
+    return recent_items
+
+
+@monitor_performance("get_all_entries_service")
+def get_all_entries_service(db: Session) -> list[RecentItem]:
+    """
+    获取知识库中的所有条目，按字母顺序排序，并包含预览。
+    性能优化：使用缓存预览和批量处理。
+    """
+    # 只查询必要的字段，减少内存使用
+    all_entries = (
+        db.query(
+            models.KnowledgeEntry.id,
+            models.KnowledgeEntry.query_text,
+            models.KnowledgeEntry.analysis_markdown,
+        )
+        .order_by(models.KnowledgeEntry.query_text.asc())
+        .all()
+    )
+
+    response_items = []
+    for entry in all_entries:
+        response_items.append(
+            RecentItem(
+                query_text=entry.query_text,
+                preview=get_cached_preview(entry.analysis_markdown),
+            )
+        )
+    return response_items
+
+
+@monitor_performance("get_suggestions_service")
+def get_suggestions_service(q: str, db: Session) -> list[DBSuggestion]:
+    """
+    【V3.3 性能优化版】优化的建议查询，使用批量操作和缓存。
+    """
+    if not q or len(q.strip()) < 1:
+        return []
+
+    suggestion_items = []
+    processed_entry_ids = set()
+
+    # 使用更高效的查询，只查询必要字段
+    # 1. 模糊查询别名（优化：只查询必要字段）
+    alias_query = (
+        db.query(
+            models.EntryAlias.alias_text,
+            models.EntryAlias.entry_id,
+            models.KnowledgeEntry.query_text,
+            models.KnowledgeEntry.analysis_markdown,
+            models.KnowledgeEntry.id.label("entry_id_main"),
+        )
+        .join(
+            models.KnowledgeEntry,
+            models.EntryAlias.entry_id == models.KnowledgeEntry.id,
+        )
+        .filter(models.EntryAlias.alias_text.ilike(f"{q}%"))
+        .limit(5)
+        .all()
+    )
+
+    # 收集所有需要详细信息的条目ID
+    entry_ids_to_load = set()
+
+    for alias_data in alias_query:
+        entry_id = alias_data.entry_id_main
+        if entry_id not in processed_entry_ids:
+            # 使用缓存的预览
+            preview = (
+                f"↪️ {alias_data.alias_text} → "
+                f"{get_cached_preview(alias_data.analysis_markdown)}"
+            )
+            suggestion_items.append(
+                DBSuggestion(
+                    entry_id=entry_id,
+                    query_text=alias_data.query_text,
+                    preview=preview,
+                    analysis_markdown=alias_data.analysis_markdown,
+                    source="知识库",
+                    follow_ups=[],  # 延迟加载
+                )
+            )
+            processed_entry_ids.add(entry_id)
+            entry_ids_to_load.add(entry_id)
+
+    # 2. 模糊查询知识条目（优化：只查询必要字段）
+    entry_query = (
+        db.query(
+            models.KnowledgeEntry.id,
+            models.KnowledgeEntry.query_text,
+            models.KnowledgeEntry.analysis_markdown,
+        )
+        .filter(
+            and_(
+                models.KnowledgeEntry.query_text.ilike(f"{q}%"),
+                models.KnowledgeEntry.id.notin_(processed_entry_ids),
+            )
+        )
+        .limit(10)
+        .all()
+    )
+
+    for entry_data in entry_query:
+        if entry_data.id not in processed_entry_ids:
+            suggestion_items.append(
+                DBSuggestion(
+                    entry_id=entry_data.id,
+                    query_text=entry_data.query_text,
+                    preview=get_cached_preview(entry_data.analysis_markdown),
+                    analysis_markdown=entry_data.analysis_markdown,
+                    source="知识库",
+                    follow_ups=[],  # 延迟加载
+                )
+            )
+            processed_entry_ids.add(entry_data.id)
+            entry_ids_to_load.add(entry_data.id)
+
+    # 3. 批量加载follow_ups（如果有的话）
+    if entry_ids_to_load:
+        follow_ups_query = (
+            db.query(models.FollowUp).filter(models.FollowUp.entry_id.in_(entry_ids_to_load)).all()
+        )
+
+        # 按entry_id分组follow_ups
+        follow_ups_map = {}
+        for fu in follow_ups_query:
+            if fu.entry_id not in follow_ups_map:
+                follow_ups_map[fu.entry_id] = []
+            follow_ups_map[fu.entry_id].append(FollowUpItem.model_validate(fu))
+
+        # 将follow_ups添加到对应的建议中
+        for suggestion in suggestion_items:
+            suggestion.follow_ups = follow_ups_map.get(suggestion.entry_id, [])
+
+    return suggestion_items
+
+
+# =================================================================================
+# 3. 核心分析函数 (Core Analysis Functions)
+# =================================================================================
+
+
+async def analyze_entry_service(
+    request: AnalyzeRequest,
+    llm_router: LLMRouter,
+    db: Session,
+    recent_searches: Deque[str],
+) -> AnalyzeResponse:
+    """
+    分析德语单词条目，提供详细的语法和语义分析。
+    """
+    query = request.query_text.strip()
+
+    try:
+        # 1. 精确缓存检查 (知识条目表和别名表)
+        entry = check_exact_cache_match(query, db)
+        if entry:
+            update_recent_searches(entry.query_text, recent_searches)
+            return AnalyzeResponse(
+                entry_id=entry.id,
+                query_text=entry.query_text,
+                analysis_markdown=entry.analysis_markdown,
+                source="知识库",
+                follow_ups=[FollowUpItem.model_validate(fu) for fu in entry.follow_ups],
+            )
+
+        # 2. 缓存未命中，先进行拼写检查
+        is_correctly_spelled, suggestion = await perform_spell_check(query, llm_router)
+        target_word = query
+        should_create_alias = False
+
+        # 3. 根据拼写检查结果进行决策
+        if not is_correctly_spelled and suggestion:
+            # 情况 A: 这是一个拼写错误
+            print(f"--- [信息] 检测到拼写错误，将 '{query}' 修正为 '{suggestion}'。")
+            target_word = suggestion
+            should_create_alias = False
+        else:
+            # 情况 B: 这是一个拼写正确的词，检查是否为变体
+            prototype_word = await identify_prototype_word(query, llm_router)
+
+            if query.lower() != prototype_word.lower():
+                # B.1: 是一个合法的单词变体
+                print(f"--- [信息] 检测到单词变体，将 '{query}' 的原型识别为 '{prototype_word}'。")
+                target_word = prototype_word
+                should_create_alias = True
+            # B.2: 本身就是原型词，无需任何操作
+
+        # 4. 执行数据库操作
+        analysis_prompt = llm_router.config.analysis_prompt
+        entry = await get_or_create_knowledge_entry(
+            target_word, request, llm_router, db, analysis_prompt
+        )
+
+        # 5. 如果需要，创建别名
+        if should_create_alias:
+            create_alias_if_needed(query, target_word, entry.id, db)
+
+        update_recent_searches(entry.query_text, recent_searches)
+        return AnalyzeResponse(
+            entry_id=entry.id,
+            query_text=entry.query_text,
+            analysis_markdown=entry.analysis_markdown,
+            source="generated",
+            follow_ups=[FollowUpItem.model_validate(fu) for fu in entry.follow_ups],
+        )
+
+    except Exception as e:
+        # 【诊断】打印完整的异常堆栈跟踪
+        print("--- [错误] 在 analyze_entry 中捕获到未处理的异常 ---")
+        traceback.print_exc()
+        print("----------------------------------------------------")
+
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"分析时发生内部错误: {e}")
