@@ -1,69 +1,96 @@
 import datetime
+
 from sqlalchemy import (
     Column,
+    DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
-    DateTime,
-    ForeignKey,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
+# 导入序列化工具
+from .serializers import (
+    serialize_entry_alias,
+    serialize_follow_up,
+    serialize_knowledge_entry,
+)
+
 Base = declarative_base()
 
+
 class KnowledgeEntry(Base):
-    __tablename__ = 'knowledge_entries'
+    __tablename__ = "knowledge_entries"
 
     id = Column(Integer, primary_key=True, index=True)
     query_text = Column(String, index=True, nullable=False, unique=True)
-    entry_type = Column(String(50), nullable=False, default='WORD')
+    entry_type = Column(String(50), nullable=False, default="WORD")
     analysis_markdown = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
-    aliases = relationship("EntryAlias", back_populates="entry", cascade="all, delete-orphan")
     follow_ups = relationship("FollowUp", back_populates="entry", cascade="all, delete-orphan")
 
     def to_dict(self):
-        """将SQLAlchemy对象转换为可序列化的字典。"""
-        return {
-            "id": self.id,
-            "query_text": self.query_text,
-            "entry_type": self.entry_type,
-            "analysis_markdown": self.analysis_markdown,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None,
-            "follow_ups": [fu.to_dict() for fu in self.follow_ups]
-        }
+        """将SQLAlchemy对象转换为可序列化的字典。
+
+        注意：此方法已弃用，请使用 serialize_knowledge_entry(self) 替代。
+        为了向后兼容性而保留，将在未来版本中移除。
+        """
+        return serialize_knowledge_entry(self)
+
+    def serialize(self, include_fields=None, exclude_fields=None):
+        """使用新的序列化系统进行序列化。"""
+        from .serializers import serialize_model
+
+        return serialize_model(
+            self,
+            include_fields=include_fields,
+            exclude_fields=exclude_fields,
+            nested_relations={
+                "follow_ups": {
+                    "many": True,
+                    "include_fields": {"id", "question", "answer", "timestamp"},
+                }
+            },
+        )
 
     def __repr__(self):
         return f"<KnowledgeEntry(query='{self.query_text}', type='{self.entry_type}')>"
 
 
 class EntryAlias(Base):
-    __tablename__ = 'entry_aliases'
+    __tablename__ = "entry_aliases"
 
     id = Column(Integer, primary_key=True, index=True)
     alias_text = Column(String, index=True, nullable=False, unique=True)
-    entry_id = Column(Integer, ForeignKey('knowledge_entries.id'), nullable=False)
+    entry_id = Column(Integer, ForeignKey("knowledge_entries.id"), nullable=False)
 
-    entry = relationship("KnowledgeEntry", back_populates="aliases")
+    entry = relationship("KnowledgeEntry")
 
     def to_dict(self):
-        """将SQLAlchemy对象转换为可序列化的字典。"""
-        return {
-            "id": self.id,
-            "alias_text": self.alias_text,
-            "entry_id": self.entry_id
-        }
+        """将SQLAlchemy对象转换为可序列化的字典。
+
+        注意：此方法已弃用，请使用 serialize_entry_alias(self) 替代。
+        为了向后兼容性而保留，将在未来版本中移除。
+        """
+        return serialize_entry_alias(self)
+
+    def serialize(self, include_fields=None, exclude_fields=None):
+        """使用新的序列化系统进行序列化。"""
+        from .serializers import serialize_model
+
+        return serialize_model(self, include_fields=include_fields, exclude_fields=exclude_fields)
 
     def __repr__(self):
         return f"<EntryAlias(alias='{self.alias_text}', entry='{self.entry.query_text}')>"
 
 
 class FollowUp(Base):
-    __tablename__ = 'follow_ups'
+    __tablename__ = "follow_ups"
 
     id = Column(Integer, primary_key=True, index=True)
-    entry_id = Column(Integer, ForeignKey('knowledge_entries.id'), nullable=False)
+    entry_id = Column(Integer, ForeignKey("knowledge_entries.id"), nullable=False)
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.datetime.utcnow)
@@ -71,14 +98,18 @@ class FollowUp(Base):
     entry = relationship("KnowledgeEntry", back_populates="follow_ups")
 
     def to_dict(self):
-        """将SQLAlchemy对象转换为可序列化的字典。"""
-        return {
-            "id": self.id,
-            "entry_id": self.entry_id,
-            "question": self.question,
-            "answer": self.answer,
-            "timestamp": self.timestamp.isoformat() if self.timestamp else None
-        }
+        """将SQLAlchemy对象转换为可序列化的字典。
+
+        注意：此方法已弃用，请使用 serialize_follow_up(self) 替代。
+        为了向后兼容性而保留，将在未来版本中移除。
+        """
+        return serialize_follow_up(self)
+
+    def serialize(self, include_fields=None, exclude_fields=None):
+        """使用新的序列化系统进行序列化。"""
+        from .serializers import serialize_model
+
+        return serialize_model(self, include_fields=include_fields, exclude_fields=exclude_fields)
 
     def __repr__(self):
         return f"<FollowUp(question='{self.question[:20]}...', entry='{self.entry.query_text}')>"
