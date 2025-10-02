@@ -3,6 +3,7 @@ fastapi
 uvicorn[standard]
 # **AI Adapter Core Dependencies**
 pydantic
+pydantic-settings
 pyyaml
 python-dotenv
 openai
