@@ -1,7 +1,8 @@
 import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
 
 # 加载 .env 文件中的环境变量
 load_dotenv()
@@ -18,6 +19,7 @@ engine = create_engine(DATABASE_URL)
 
 # 创建一个配置好的 "Session" 类
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
 
 # 一个简单的函数，用于创建一个新的数据库会话
 def get_db():
