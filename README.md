@@ -147,6 +147,14 @@ docker run -p 8000:8000 de-ai-hilfer-backend
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
 
+## 📚 项目文档
+
+- [API 文档](API_DOCUMENTATION.md) - 详细的API接口文档
+- [设计图文档](DESIGN_DIAGRAMS.md) - 系统架构图、API流程图、数据库ER图、部署架构图
+- [前端开发指南](FRONTEND_DEVELOPMENT_GUIDE.md) - 给大模型的核心信息和开发指导
+- [部署指南](DEPLOYMENT_GUIDE.md) - 生产和开发环境部署说明
+- [项目进度](progress.md) - 开发进度和架构改进记录
+
 ## 主要API端点
 
 ### 基础查询
