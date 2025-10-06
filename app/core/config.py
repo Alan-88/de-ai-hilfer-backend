@@ -36,6 +36,9 @@ class APIConfig(BaseSettings):
         default=[
             "http://localhost:5173",  # SvelteKit 开发服务器
             "http://localhost",
+            "https://vercel.app",  # Vercel 域名
+            "https://*.vercel.app",  # Vercel 子域名
+            "https://de-ai-hilfer-webapp.vercel.app",  # 具体的Vercel应用域名
         ],
         env="CORS_ORIGINS",
         description="允许的CORS源",
