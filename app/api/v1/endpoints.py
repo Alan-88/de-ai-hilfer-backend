@@ -340,3 +340,23 @@ def get_server_status(db: Session = Depends(get_db)):
         - 响应时间快，适合频繁调用
     """
     return get_server_status_service(db)
+
+
+@router.get("/debug/cors", tags=["Debug"])
+def debug_cors():
+    """
+    调试CORS配置，显示当前允许的源。
+
+    Returns:
+        dict: 包含当前CORS配置信息的字典
+
+    Note:
+        - 仅用于调试目的
+        - 显示当前配置的允许源列表
+        - 帮助诊断CORS相关问题
+    """
+    from app.core.config import settings
+    return {
+        "cors_origins": settings.api.cors_origins,
+        "environment": settings.environment
+    }
