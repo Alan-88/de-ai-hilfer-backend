@@ -123,41 +123,56 @@ def infer_entry_type(query: str) -> EntryType:
 
 def get_preview_from_analysis(analysis: str) -> str:
     """
-    【V3.7 纯净版】从完整的Markdown分析中智能提取所有核心释义作为预览。
-    只支持标准的 `* **pos.** **definition**` 格式。
+    【V3.8 智能感知版】从完整的Markdown分析中智能提取预览。
+    能够区分单词和词缀，并为它们生成合适的预览。
     """
     try:
-        # 1. 首先定位到"核心释义"区域，避免匹配到其他部分
+        # 方案1: 尝试匹配词缀格式 (通过关键词: Präfix, Suffix 等)
+        # 格式示例: * **Präfix/Vorsilbe** **核心含义...**
+        affix_pattern = r"\*\s*\*\*(Präfix|Suffix|Vorsilbe|Nachsilbe)[^ ]*\*\*\s*\*\*(.*?)\*\*"
+        affix_match = re.search(affix_pattern, analysis, re.IGNORECASE)
+        if affix_match:
+            # 提取类型和核心含义
+            affix_type = affix_match.group(1).strip()
+            affix_meaning = affix_match.group(2).strip().split("\n")[0]
+            # 返回一个简洁、专门为词缀设计的预览
+            preview = f"{affix_type}: {affix_meaning}"
+            return (preview[:70] + "...") if len(preview) > 70 else preview
+
+        # 方案2: 如果不是词缀，则回退到单词格式匹配
+        # 在 "核心释义" 区域内查找
         bedeutung_match = re.search(
             r"#### 核心释义 \(Bedeutung\)(.*?)####", analysis, re.DOTALL | re.IGNORECASE
         )
         search_area = bedeutung_match.group(1) if bedeutung_match else analysis
-
-        # 2. 定义词性模式和标准格式的匹配模式
+        
+        # 匹配 `* **词性.** **释义**` 格式
         pos_pattern = r"([a-z\./]+)\.?"
         standard_pattern = r"\*\s*\*\*" + pos_pattern + r"\*\*\s*\*\*(.*?)\*\*"
-
-        # 3. 【核心修改】只使用 re.findall 查找标准格式的匹配项
         matches = re.findall(standard_pattern, search_area, re.IGNORECASE)
-
-        # 4. 如果找到一个或多个匹配项，则拼接它们
+        
         if matches:
             preview_parts = []
             for pos, definition in matches:
-                # 清理和格式化每个部分
-                clean_pos = pos.strip() + "." if not pos.strip().endswith(".") else pos.strip()
+                clean_pos = pos.strip().rstrip('.') + "."
                 clean_def = definition.strip().split("\n")[0]
                 preview_parts.append(f"{clean_pos} {clean_def}")
-
             return "; ".join(preview_parts)
 
     except Exception as e:
         print(f"--- {ErrorMessages.PREVIEW_EXTRACTION_ERROR.format(error=e)} ---")
         pass
 
-    # 5. 如果标准格式匹配失败，则直接使用备用方案
-    fallback_preview = analysis.lstrip("#* /").strip()
-    return (fallback_preview[:40] + "...") if len(fallback_preview) > 40 else fallback_preview
+    # 方案3: 通用备用方案，适用于任何未知格式
+    # 移除Markdown标题和星号，取第一行有效内容
+    lines = analysis.strip().split('\n')
+    for line in lines:
+        clean_line = line.strip('#* /').strip()
+        if clean_line:
+            return (clean_line[:70] + "...") if len(clean_line) > 70 else clean_line
+    
+    # 如果完全为空，返回一个默认值
+    return "无法生成预览"
 
 
 def check_exact_cache_match(query: str, db: Session) -> Optional[models.KnowledgeEntry]:
