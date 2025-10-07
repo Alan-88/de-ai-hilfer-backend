@@ -1,7 +1,15 @@
 from enum import Enum
-from typing import List, Literal, Union
+from typing import List, Literal, Union, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+# 新增：定义条目类型的枚举
+class EntryType(str, Enum):
+    WORD = "WORD"
+    PHRASE = "PHRASE"
+    PREFIX = "PREFIX"
+    SUFFIX = "SUFFIX"
 
 # --- Suggestion Schemas (V3.1 - 智能提示版) ---
 
@@ -139,8 +147,9 @@ class AnalyzeRequest(BaseModel):
     用于 /analyze 端点的请求体，支持对德语文本进行智能分析。
     """
 
-    query_text: str = Field(..., description="用户输入的查询文本（单词、短语等）。")
-    entry_type: str = Field("WORD", description="条目类型, 例如 'WORD', 'PHRASE'。")
+    query_text: str = Field(..., description="用户输入的查询文本（单词、短语、前缀、后缀等）。")
+    # 修改：将 entry_type 设为可选，后端会自动推断
+    entry_type: Optional[EntryType] = Field(default=None, description="可选：强制指定条目类型, 如果不提供，后端会自动推断。")
 
 
 class AnalyzeResponse(BaseModel):

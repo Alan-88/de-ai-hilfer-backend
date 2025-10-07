@@ -127,7 +127,7 @@ async def analyze_entry(
     recent_searches: Deque[str] = Depends(get_recent_searches),
 ) -> AnalyzeResponse:
     """
-    分析德语单词条目，提供详细的语法和语义分析。
+    分析德语知识条目，支持单词、短语、前缀和后缀的统一分析。
 
     Args:
         request (AnalyzeRequest): 包含查询文本和条目类型的请求对象
@@ -139,12 +139,16 @@ async def analyze_entry(
         AnalyzeResponse: 包含详细分析的响应对象
 
     Note:
+        - 支持多种条目类型：单词(WORD)、短语(PHRASE)、前缀(PREFIX)、后缀(SUFFIX)
         - 支持缓存机制，已存在的条目直接返回
-        - 自动进行拼写检查和原型词识别
-        - 为单词变体自动创建别名
-        - 分析结果包含词性、释义、例句等完整信息
+        - 单词类型自动进行拼写检查和原型词识别，为变体创建别名
+        - 词缀类型使用专门的构词法分析提示词，提供详细的语法和语义分析
+        - 所有条目类型都支持追问功能和知识库存储
+        - 分析结果根据条目类型包含相应的专业信息
     """
     return await analyze_entry_service(request, llm_router, db, recent_searches)
+
+
 
 
 # =================================================================================
