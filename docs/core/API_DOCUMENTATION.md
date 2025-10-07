@@ -165,6 +165,102 @@ curl -X GET "http://localhost:8000/api/v1/suggestions?q=haus"
 - **描述**: 检查后端服务和数据库连接的健康状态
 - **响应**: `{"status": "ok", "db_status": "ok"}`
 
+## 预览功能
+
+### V3.8 智能感知预览系统
+
+从v3.8.0版本开始，系统引入了智能感知预览功能，能够自动识别查询内容的类型（单词或词缀）并生成相应的预览文本。
+
+#### 功能特性
+
+1. **智能类型识别**
+   - 自动识别词缀格式（包含Präfix、Suffix、Vorsilbe、Nachsilbe等关键词）
+   - 自动识别单词格式（传统的词性+释义格式）
+
+2. **三层处理机制**
+   - **词缀优先**：专门为词缀设计的正则表达式匹配
+   - **单词回退**：传统的单词格式解析逻辑
+   - **通用兜底**：确保总能生成可读预览的备用方案
+
+3. **预览格式示例**
+
+   **词缀预览格式**：
+   ```
+   Präfix: 表示动作的完成、结果...
+   Suffix: 表示小称、亲切...
+   ```
+
+   **单词预览格式**：
+   ```
+   n. 房子；住宅；家庭; v. 去；走；进行
+   ```
+
+#### 技术实现
+
+预览提取函数 `get_preview_from_analysis` 采用以下处理流程：
+
+```python
+def get_preview_from_analysis(analysis: str) -> str:
+    """
+    【V3.8 智能感知版】从完整的Markdown分析中智能提取预览。
+    能够区分单词和词缀，并为它们生成合适的预览。
+    """
+    try:
+        # 方案1: 尝试匹配词缀格式
+        affix_pattern = r"\*\s*\*\*(Präfix|Suffix|Vorsilbe|Nachsilbe)[^ ]*\*\*\s*\*\*(.*?)\*\*"
+        affix_match = re.search(affix_pattern, analysis, re.IGNORECASE)
+        if affix_match:
+            affix_type = affix_match.group(1).strip()
+            affix_meaning = affix_match.group(2).strip().split("\n")[0]
+            preview = f"{affix_type}: {affix_meaning}"
+            return (preview[:70] + "...") if len(preview) > 70 else preview
+
+        # 方案2: 单词格式回退
+        # [传统单词匹配逻辑]
+        
+        # 方案3: 通用备用方案
+        # [通用文本提取逻辑]
+    except Exception as e:
+        # 错误处理
+        pass
+```
+
+#### 向后兼容性
+
+- 完全兼容现有的单词分析格式
+- 不影响现有API响应结构
+- 自动适配新的词缀分析格式
+
+#### 鲁棒性保证
+
+- 即使AI返回意外格式，系统也能提取有效预览
+- 多层错误处理机制确保系统稳定性
+- 预览长度限制（70字符）确保显示效果
+
+#### 相关API端点
+
+以下端点的响应中包含预览文本：
+
+- `GET /recent` - 返回 `RecentItem[]`，每个项目包含 `preview` 字段
+- `GET /suggestions` - 返回 `DBSuggestion[]`，每个建议包含 `preview` 字段
+- `POST /analyze` - 返回 `AnalyzeResponse`，通过内部预览提取生成
+
+#### 预览文本结构
+
+```json
+{
+  "query_text": "un-",
+  "preview": "Präfix: 表示否定、相反..."
+}
+```
+
+```json
+{
+  "query_text": "Haus",
+  "preview": "n. 房子；住宅；家庭"
+}
+```
+
 ## 数据模型
 
 ### 请求模型
@@ -383,9 +479,9 @@ curl -X POST "http://localhost:8000/api/v1/import" \
 
 ## 版本信息
 
-- **当前版本**: v1.1.1
+- **当前版本**: v3.8.0
 - **API版本**: v1
-- **更新日期**: 2025-10-02
+- **更新日期**: 2025-10-07
 
 ## 支持
 
@@ -397,4 +493,4 @@ curl -X POST "http://localhost:8000/api/v1/import" \
 
 ---
 
-*最后更新: 2025-10-02*
+*最后更新: 2025-10-07*
