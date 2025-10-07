@@ -29,6 +29,7 @@ from app.schemas.dictionary import (
     DBSuggestion,
     FollowUpItem,
     RecentItem,
+    EntryType, # 导入新的枚举
 )
 
 # =================================================================================
@@ -93,6 +94,30 @@ def batch_get_entries_by_ids(db: Session, entry_ids: List[int]) -> Dict[int, mod
 
 # =================================================================================
 # 1. 核心辅助函数 (Helper Functions)
+# =================================================================================
+
+
+def infer_entry_type(query: str) -> EntryType:
+    """
+    智能推断条目类型（单词、前缀、后缀）。
+    
+    Args:
+        query (str): 用户输入的查询文本
+        
+    Returns:
+        EntryType: 推断出的条目类型
+    """
+    clean_query = query.strip('-')
+    if query.endswith('-') and len(clean_query) > 0:
+        return EntryType.PREFIX
+    elif query.startswith('-') and len(clean_query) > 0:
+        return EntryType.SUFFIX
+    else:
+        return EntryType.WORD  # 默认为单词
+
+
+# =================================================================================
+# 2. 核心辅助函数 (Helper Functions)
 # =================================================================================
 
 
@@ -296,103 +321,146 @@ def get_all_entries_service(db: Session) -> list[RecentItem]:
 @monitor_performance("get_suggestions_service")
 def get_suggestions_service(q: str, db: Session) -> list[DBSuggestion]:
     """
-    【V3.3 性能优化版】优化的建议查询，使用批量操作和缓存。
+    【V3.4 词缀感知版】优化的建议查询。
+    - 如果输入是词缀 (如 'ver-' 或 '-keit')，则同时返回词缀本身和包含该词缀的单词。
+    - 否则，执行常规的别名和单词查询。
     """
-    if not q or len(q.strip()) < 1:
+    query = q.strip()
+    if not query or len(query) < 2:
         return []
 
     suggestion_items = []
     processed_entry_ids = set()
 
-    # 使用更高效的查询，只查询必要字段
-    # 1. 模糊查询别名（优化：只查询必要字段）
-    alias_query = (
-        db.query(
-            models.EntryAlias.alias_text,
-            models.EntryAlias.entry_id,
-            models.KnowledgeEntry.query_text,
-            models.KnowledgeEntry.analysis_markdown,
-            models.KnowledgeEntry.id.label("entry_id_main"),
-        )
-        .join(
-            models.KnowledgeEntry,
-            models.EntryAlias.entry_id == models.KnowledgeEntry.id,
-        )
-        .filter(models.EntryAlias.alias_text.ilike(f"{q}%"))
-        .limit(5)
-        .all()
-    )
-
-    # 收集所有需要详细信息的条目ID
-    entry_ids_to_load = set()
-
-    for alias_data in alias_query:
-        entry_id = alias_data.entry_id_main
-        if entry_id not in processed_entry_ids:
-            # 使用缓存的预览
-            preview = (
-                f"↪️ {alias_data.alias_text} → "
-                f"{get_cached_preview(alias_data.analysis_markdown)}"
-            )
+    # =====================================================================
+    # 1. 新增：词缀查询的专属处理逻辑
+    # =====================================================================
+    # 使用统一的推断逻辑确定条目类型
+    entry_type = infer_entry_type(query)
+    
+    if entry_type in [EntryType.PREFIX, EntryType.SUFFIX]:
+        clean_query = query.strip('-')
+        is_prefix = entry_type == EntryType.PREFIX
+        is_suffix = entry_type == EntryType.SUFFIX
+        # 步骤 A: 精确查找词缀条目本身，并置于列表顶部
+        affix_entry = db.query(models.KnowledgeEntry).filter(models.KnowledgeEntry.query_text == query).first()
+        if affix_entry:
             suggestion_items.append(
                 DBSuggestion(
-                    entry_id=entry_id,
-                    query_text=alias_data.query_text,
-                    preview=preview,
-                    analysis_markdown=alias_data.analysis_markdown,
+                    entry_id=affix_entry.id,
+                    query_text=affix_entry.query_text,
+                    preview=get_cached_preview(affix_entry.analysis_markdown),
+                    analysis_markdown=affix_entry.analysis_markdown,
                     source="知识库",
-                    follow_ups=[],  # 延迟加载
+                    follow_ups=[],  # 稍后批量加载
                 )
             )
-            processed_entry_ids.add(entry_id)
-            entry_ids_to_load.add(entry_id)
+            processed_entry_ids.add(affix_entry.id)
 
-    # 2. 模糊查询知识条目（优化：只查询必要字段）
-    entry_query = (
-        db.query(
-            models.KnowledgeEntry.id,
-            models.KnowledgeEntry.query_text,
-            models.KnowledgeEntry.analysis_markdown,
+        # 步骤 B: 模糊查找包含该词缀的单词作为示例
+        if is_prefix:
+            pattern = f"{clean_query}%"
+        else:  # is_suffix
+            pattern = f"%{clean_query}"
+        
+        # 只查找单词类型的条目作为示例
+        example_words = (
+            db.query(models.KnowledgeEntry)
+            .filter(
+                models.KnowledgeEntry.query_text.ilike(pattern),
+                models.KnowledgeEntry.id.notin_(processed_entry_ids),
+                models.KnowledgeEntry.entry_type == 'WORD' 
+            )
+            .limit(10)
+            .all()
         )
-        .filter(
-            and_(
-                models.KnowledgeEntry.query_text.ilike(f"{q}%"),
+
+        for word in example_words:
+            suggestion_items.append(
+                DBSuggestion(
+                    entry_id=word.id,
+                    query_text=word.query_text,
+                    preview=get_cached_preview(word.analysis_markdown),
+                    analysis_markdown=word.analysis_markdown,
+                    source="知识库",
+                    follow_ups=[], # 稍后批量加载
+                )
+            )
+            processed_entry_ids.add(word.id)
+
+    # =====================================================================
+    # 2. 保留：常规单词和别名的查询逻辑
+    # =====================================================================
+    else:
+        # 步骤 A: 模糊查询别名
+        alias_query = (
+            db.query(
+                models.EntryAlias.alias_text,
+                models.KnowledgeEntry.query_text,
+                models.KnowledgeEntry.analysis_markdown,
+                models.KnowledgeEntry.id.label("entry_id"),
+            )
+            .join(models.KnowledgeEntry, models.EntryAlias.entry_id == models.KnowledgeEntry.id)
+            .filter(
+                models.EntryAlias.alias_text.ilike(f"{query}%"),
+                models.EntryAlias.entry_id.notin_(processed_entry_ids)
+            )
+            .limit(5)
+            .all()
+        )
+        for alias_data in alias_query:
+            if alias_data.entry_id not in processed_entry_ids:
+                preview = f"↪️ {alias_data.alias_text} → {get_cached_preview(alias_data.analysis_markdown)}"
+                suggestion_items.append(
+                    DBSuggestion(
+                        entry_id=alias_data.entry_id,
+                        query_text=alias_data.query_text,
+                        preview=preview,
+                        analysis_markdown=alias_data.analysis_markdown,
+                        source="知识库",
+                        follow_ups=[],
+                    )
+                )
+                processed_entry_ids.add(alias_data.entry_id)
+
+        # 步骤 B: 模糊查询知识条目
+        entry_query = (
+            db.query(models.KnowledgeEntry)
+            .filter(
+                models.KnowledgeEntry.query_text.ilike(f"{query}%"),
                 models.KnowledgeEntry.id.notin_(processed_entry_ids),
             )
+            .limit(10)
+            .all()
         )
-        .limit(10)
-        .all()
-    )
-
-    for entry_data in entry_query:
-        if entry_data.id not in processed_entry_ids:
-            suggestion_items.append(
-                DBSuggestion(
-                    entry_id=entry_data.id,
-                    query_text=entry_data.query_text,
-                    preview=get_cached_preview(entry_data.analysis_markdown),
-                    analysis_markdown=entry_data.analysis_markdown,
-                    source="知识库",
-                    follow_ups=[],  # 延迟加载
+        for entry_data in entry_query:
+            if entry_data.id not in processed_entry_ids:
+                suggestion_items.append(
+                    DBSuggestion(
+                        entry_id=entry_data.id,
+                        query_text=entry_data.query_text,
+                        preview=get_cached_preview(entry_data.analysis_markdown),
+                        analysis_markdown=entry_data.analysis_markdown,
+                        source="知识库",
+                        follow_ups=[],
+                    )
                 )
-            )
-            processed_entry_ids.add(entry_data.id)
-            entry_ids_to_load.add(entry_data.id)
+                processed_entry_ids.add(entry_data.id)
 
-    # 3. 批量加载follow_ups（如果有的话）
+    # =====================================================================
+    # 3. 统一处理：为所有建议批量加载追问信息（性能优化）
+    # =====================================================================
+    entry_ids_to_load = {s.entry_id for s in suggestion_items}
     if entry_ids_to_load:
         follow_ups_query = (
             db.query(models.FollowUp).filter(models.FollowUp.entry_id.in_(entry_ids_to_load)).all()
         )
-
-        # 按entry_id分组follow_ups
         follow_ups_map = {}
         for fu in follow_ups_query:
             if fu.entry_id not in follow_ups_map:
                 follow_ups_map[fu.entry_id] = []
             follow_ups_map[fu.entry_id].append(FollowUpItem.model_validate(fu))
-
-        # 将follow_ups添加到对应的建议中
+        
         for suggestion in suggestion_items:
             suggestion.follow_ups = follow_ups_map.get(suggestion.entry_id, [])
 
@@ -411,12 +479,15 @@ async def analyze_entry_service(
     recent_searches: Deque[str],
 ) -> AnalyzeResponse:
     """
-    分析德语单词条目，提供详细的语法和语义分析。
+    【V2 - 统一版】分析德语条目（包括单词、词缀等），提供详细的语法和语义分析。
     """
     query = request.query_text.strip()
+    
+    # 使用智能推断逻辑确定条目类型（如果用户没有明确指定）
+    entry_type = request.entry_type if request.entry_type else infer_entry_type(query)
 
     try:
-        # 1. 精确缓存检查 (知识条目表和别名表)
+        # 1. 精确缓存检查 (所有类型的条目共用)
         entry = check_exact_cache_match(query, db)
         if entry:
             update_recent_searches(entry.query_text, recent_searches)
@@ -428,38 +499,49 @@ async def analyze_entry_service(
                 follow_ups=[FollowUpItem.model_validate(fu) for fu in entry.follow_ups],
             )
 
-        # 2. 缓存未命中，先进行拼写检查
-        is_correctly_spelled, suggestion = await perform_spell_check(query, llm_router)
-        target_word = query
-        should_create_alias = False
+        # 2. 根据条目类型，执行不同的处理逻辑
+        # ============ 词缀处理逻辑 (PREFIX/SUFFIX) ============
+        if entry_type in [EntryType.PREFIX, EntryType.SUFFIX]:
+            print(f"--- [信息] 检测到词缀分析请求: '{query}' ({entry_type})。")
+            
+            # 为词缀选择专用的提示词
+            analysis_prompt = llm_router.config.affix_analysis_prompt
+            
+            # 【核心】复用 get_or_create_knowledge_entry，但传入不同的提示词
+            entry = await get_or_create_knowledge_entry(
+                query, request, llm_router, db, analysis_prompt
+            )
 
-        # 3. 根据拼写检查结果进行决策
-        if not is_correctly_spelled and suggestion:
-            # 情况 A: 这是一个拼写错误
-            print(f"--- [信息] 检测到拼写错误，将 '{query}' 修正为 '{suggestion}'。")
-            target_word = suggestion
-            should_create_alias = False
+        # ============ 单词处理逻辑 (WORD/PHRASE) ============
         else:
-            # 情况 B: 这是一个拼写正确的词，检查是否为变体
-            prototype_word = await identify_prototype_word(query, llm_router)
+            # 2.1. 缓存未命中，先进行拼写检查
+            is_correctly_spelled, suggestion = await perform_spell_check(query, llm_router)
+            target_word = query
+            should_create_alias = False
 
-            if query.lower() != prototype_word.lower():
-                # B.1: 是一个合法的单词变体
-                print(f"--- [信息] 检测到单词变体，将 '{query}' 的原型识别为 '{prototype_word}'。")
-                target_word = prototype_word
-                should_create_alias = True
-            # B.2: 本身就是原型词，无需任何操作
+            # 2.2. 根据拼写检查结果进行决策
+            if not is_correctly_spelled and suggestion:
+                print(f"--- [信息] 检测到拼写错误，将 '{query}' 修正为 '{suggestion}'。")
+                target_word = suggestion
+                should_create_alias = False
+            else:
+                prototype_word = await identify_prototype_word(query, llm_router)
+                if query.lower() != prototype_word.lower():
+                    print(f"--- [信息] 检测到单词变体，将 '{query}' 的原型识别为 '{prototype_word}'。")
+                    target_word = prototype_word
+                    should_create_alias = True
 
-        # 4. 执行数据库操作
-        analysis_prompt = llm_router.config.analysis_prompt
-        entry = await get_or_create_knowledge_entry(
-            target_word, request, llm_router, db, analysis_prompt
-        )
+            # 2.3. 执行数据库操作 (使用单词分析的提示词)
+            analysis_prompt = llm_router.config.analysis_prompt
+            entry = await get_or_create_knowledge_entry(
+                target_word, request, llm_router, db, analysis_prompt
+            )
 
-        # 5. 如果需要，创建别名
-        if should_create_alias:
-            create_alias_if_needed(query, target_word, entry.id, db)
+            # 2.4. 如果需要，创建别名
+            if should_create_alias:
+                create_alias_if_needed(query, target_word, entry.id, db)
 
+        # 3. 统一返回结果
         update_recent_searches(entry.query_text, recent_searches)
         return AnalyzeResponse(
             entry_id=entry.id,
@@ -470,10 +552,6 @@ async def analyze_entry_service(
         )
 
     except Exception as e:
-        # 【诊断】打印完整的异常堆栈跟踪
-        print("--- [错误] 在 analyze_entry 中捕获到未处理的异常 ---")
         traceback.print_exc()
-        print("----------------------------------------------------")
-
         db.rollback()
         raise HTTPException(status_code=500, detail=f"分析时发生内部错误: {e}")
