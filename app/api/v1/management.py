@@ -427,6 +427,46 @@ async def export_database_service():
             env = os.environ.copy()
             if parsed_url.password:
                 env["PGPASSWORD"] = parsed_url.password
+            
+            # 执行pg_dump命令
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command, 
+                    stdout=asyncio.subprocess.PIPE, 
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env  # 传递包含密码的环境变量
+                )
+                stdout, stderr = await process.communicate()
+
+                if process.returncode != 0:
+                    error_message = stderr.decode().strip()
+                    print(f"--- [错误] pg_dump 执行失败: {error_message} ---")
+                    # 如果 pg_dump 失败，也要清理可能创建的空文件
+                    if os.path.exists(temp_backup_path):
+                        os.remove(temp_backup_path)
+                    raise HTTPException(status_code=500, detail=f"数据库备份失败: {error_message}")
+
+                # 定义一个清理函数
+                def cleanup():
+                    print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
+                    os.remove(temp_backup_path)
+
+                # 将清理函数包装成一个 BackgroundTask
+                cleanup_task = BackgroundTask(cleanup)
+
+                # 将 background task 传递给 FileResponse
+                return FileResponse(
+                    path=temp_backup_path,
+                    filename=os.path.basename(temp_backup_path),
+                    media_type="application/sql",
+                    background=cleanup_task,
+                )
+
+            except FileNotFoundError:
+                raise HTTPException(
+                    status_code=HTTPStatusCodes.INTERNAL_SERVER_ERROR,
+                    detail=ErrorMessages.PG_DUMP_NOT_FOUND,
+                )
         else:
             raise HTTPException(
                 status_code=500,
@@ -439,49 +479,6 @@ async def export_database_service():
             detail=f"解析数据库URL失败: {str(e)}"
         )
 
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *command, 
-            stdout=asyncio.subprocess.PIPE, 
-            stderr=asyncio.subprocess.PIPE,
-            env=env  # 传递包含密码的环境变量
-        )
-        stdout, stderr = await process.communicate()
-
-        if process.returncode != 0:
-            error_message = stderr.decode().strip()
-            print(f"--- [错误] pg_dump 执行失败: {error_message} ---")
-            # 如果 pg_dump 失败，也要清理可能创建的空文件
-            if os.path.exists(temp_backup_path):
-                os.remove(temp_backup_path)
-            raise HTTPException(status_code=500, detail=f"数据库备份失败: {error_message}")
-
-        # 定义一个清理函数
-        def cleanup():
-            print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
-            os.remove(temp_backup_path)
-
-        # 将清理函数包装成一个 BackgroundTask
-        cleanup_task = BackgroundTask(cleanup)
-
-        # 将 background task 传递给 FileResponse
-        return FileResponse(
-            path=temp_backup_path,
-            filename=os.path.basename(temp_backup_path),
-            media_type="application/sql",
-            background=cleanup_task,
-        )
-
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=HTTPStatusCodes.INTERNAL_SERVER_ERROR,
-            detail=ErrorMessages.PG_DUMP_NOT_FOUND,
-        )
-    except Exception as e:
-        # 如果在 FileResponse 创建前就发生异常，也需要清理
-        if os.path.exists(temp_backup_path):
-            os.remove(temp_backup_path)
-        raise HTTPException(status_code=500, detail=f"创建备份时发生未知错误: {str(e)}")
 
 
 async def import_database_service(
