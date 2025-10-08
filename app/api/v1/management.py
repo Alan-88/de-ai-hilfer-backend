@@ -340,6 +340,7 @@ async def export_database_service():
         - 备份文件名包含时间戳便于管理
         - 使用FastAPI的BackgroundTask机制自动清理临时文件
         - 临时文件存储在/tmp目录下
+        - 支持Render环境的网络连接数据库
     """
     db_url = get_database_url()
     if not db_url:
@@ -351,45 +352,67 @@ async def export_database_service():
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     temp_backup_path = f"/tmp/de_ai_hilfer_backup_{timestamp}.sql"
 
-    command = [
-        "pg_dump",
-        "--clean",
-        "--if-exists",
-        "-d",
-        db_url,
-        "-f",
-        temp_backup_path,
-    ]
+    # 解析数据库URL以获取连接参数
+    import urllib.parse
+    
+    try:
+        parsed_url = urllib.parse.urlparse(db_url)
+        
+        # 构建pg_dump命令参数
+        command = [
+            "pg_dump",
+            "--clean",
+            "--if-exists",
+            "--no-password",  # 避免密码提示
+            "--host", parsed_url.hostname,
+            "--port", str(parsed_url.port or 5432),
+            "--username", parsed_url.username,
+            "--dbname", parsed_url.path.lstrip('/'),  # 移除开头的斜杠
+            "-f", temp_backup_path,
+        ]
+        
+        # 设置密码环境变量
+        env = os.environ.copy()
+        if parsed_url.password:
+            env["PGPASSWORD"] = parsed_url.password
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"解析数据库URL失败: {str(e)}"
+        )
 
     try:
         process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *command, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE,
+            env=env  # 传递包含密码的环境变量
         )
         stdout, stderr = await process.communicate()
 
         if process.returncode != 0:
             error_message = stderr.decode().strip()
             print(f"--- [错误] pg_dump 执行失败: {error_message} ---")
-            # 【改进】如果 pg_dump 失败，也要清理可能创建的空文件
+            # 如果 pg_dump 失败，也要清理可能创建的空文件
             if os.path.exists(temp_backup_path):
                 os.remove(temp_backup_path)
             raise HTTPException(status_code=500, detail=f"数据库备份失败: {error_message}")
 
-        # --- 【核心修复】 ---
-        # 1. 定义一个清理函数
+        # 定义一个清理函数
         def cleanup():
             print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
             os.remove(temp_backup_path)
 
-        # 2. 将清理函数包装成一个 BackgroundTask
+        # 将清理函数包装成一个 BackgroundTask
         cleanup_task = BackgroundTask(cleanup)
 
-        # 3. 将 background task 传递给 FileResponse
+        # 将 background task 传递给 FileResponse
         return FileResponse(
             path=temp_backup_path,
             filename=os.path.basename(temp_backup_path),
             media_type="application/sql",
-            background=cleanup_task,  # <-- 在这里传入任务
+            background=cleanup_task,
         )
 
     except FileNotFoundError:
@@ -478,10 +501,40 @@ async def import_database_service(
 
         # --- 统一的 psql 执行逻辑 ---
         print(f"--- [数据库导入] 开始从 {source_description} 恢复...")
-        command = ["psql", "-d", db_url, "-f", temp_sql_path]
+        
+        # 解析数据库URL以获取连接参数（与导出逻辑保持一致）
+        import urllib.parse
+        
+        try:
+            parsed_url = urllib.parse.urlparse(db_url)
+            
+            # 构建psql命令参数
+            command = [
+                "psql",
+                "--no-password",  # 避免密码提示
+                "--host", parsed_url.hostname,
+                "--port", str(parsed_url.port or 5432),
+                "--username", parsed_url.username,
+                "--dbname", parsed_url.path.lstrip('/'),  # 移除开头的斜杠
+                "-f", temp_sql_path,
+            ]
+            
+            # 设置密码环境变量
+            env = os.environ.copy()
+            if parsed_url.password:
+                env["PGPASSWORD"] = parsed_url.password
+                
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, 
+                detail=f"解析数据库URL失败: {str(e)}"
+            )
 
         process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            *command, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE,
+            env=env  # 传递包含密码的环境变量
         )
         stdout, stderr = await process.communicate()
 
