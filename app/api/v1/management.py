@@ -439,18 +439,17 @@ async def export_database_service():
                     
                     # 为每个表创建结构和数据
                     for table in tables:
-                        # 获取表结构
+                        # 获取表结构 - 修复SQL语法
                         create_result = pg_conn.execute(text(f"""
-                            SELECT sql FROM (
-                                SELECT 
-                                    'CREATE TABLE ' || table_name || ' (' || 
-                                    string_agg(column_name || ' ' || data_type || 
-                                               CASE WHEN character_maximum_length IS NOT NULL 
-                                                    THEN '(' || character_maximum_length || ')' 
-                                                    ELSE '' END, ', ') || ')' as sql
-                                FROM information_schema.columns 
-                                WHERE table_name = '{table}' AND table_schema = 'public'
-                            ) AS create_sql
+                            SELECT 
+                                'CREATE TABLE ' || table_name || ' (' || 
+                                string_agg(column_name || ' ' || data_type || 
+                                           CASE WHEN character_maximum_length IS NOT NULL 
+                                                THEN '(' || character_maximum_length || ')' 
+                                                ELSE '' END, ', ' ORDER BY ordinal_position) || ')' as sql
+                            FROM information_schema.columns 
+                            WHERE table_name = '{table}' AND table_schema = 'public'
+                            GROUP BY table_name
                         """))
                         
                         create_sql = create_result.scalar()
