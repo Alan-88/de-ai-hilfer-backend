@@ -358,6 +358,25 @@ async def export_database_service():
     try:
         parsed_url = urllib.parse.urlparse(db_url)
         
+        # 验证必要的URL组件
+        if not parsed_url.hostname:
+            raise HTTPException(
+                status_code=500, 
+                detail="数据库URL中缺少主机名"
+            )
+        
+        if not parsed_url.username:
+            raise HTTPException(
+                status_code=500, 
+                detail="数据库URL中缺少用户名"
+            )
+        
+        if not parsed_url.path or parsed_url.path == '/':
+            raise HTTPException(
+                status_code=500, 
+                detail="数据库URL中缺少数据库名"
+            )
+        
         # 构建pg_dump命令参数
         command = [
             "pg_dump",
@@ -507,6 +526,25 @@ async def import_database_service(
         
         try:
             parsed_url = urllib.parse.urlparse(db_url)
+            
+            # 验证必要的URL组件
+            if not parsed_url.hostname:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="数据库URL中缺少主机名"
+                )
+            
+            if not parsed_url.username:
+                raise HTTPException(
+                    status_code=500, 
+                    detail="数据库URL中缺少用户名"
+                )
+            
+            if not parsed_url.path or parsed_url.path == '/':
+                raise HTTPException(
+                    status_code=500, 
+                    detail="数据库URL中缺少数据库名"
+                )
             
             # 构建psql命令参数
             command = [
