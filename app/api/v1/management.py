@@ -362,38 +362,76 @@ async def export_database_service():
         print(f"--- [调试] 数据库URL: {db_url} ---")
         print(f"--- [调试] 解析结果: hostname={parsed_url.hostname}, port={parsed_url.port}, username={parsed_url.username}, dbname={parsed_url.path} ---")
         
-        # 构建pg_dump命令参数
-        dbname = parsed_url.path.lstrip('/') if parsed_url.path else ""
-        if not dbname:
-            raise HTTPException(
-                status_code=500,
-                detail="数据库URL中未指定数据库名"
+        # 检查数据库类型
+        if db_url.startswith("sqlite://"):
+            # SQLite数据库备份
+            print("--- [调试] 检测到SQLite数据库，使用文件复制方式备份 ---")
+            import shutil
+            sqlite_db_path = parsed_url.path  # 获取SQLite数据库文件路径
+            if not sqlite_db_path or not os.path.exists(sqlite_db_path):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"SQLite数据库文件不存在: {sqlite_db_path}"
+                )
+            
+            # 直接复制SQLite数据库文件
+            shutil.copy2(sqlite_db_path, temp_backup_path)
+            
+            # 定义清理函数
+            def cleanup():
+                print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
+                os.remove(temp_backup_path)
+
+            cleanup_task = BackgroundTask(cleanup)
+            
+            return FileResponse(
+                path=temp_backup_path,
+                filename=os.path.basename(temp_backup_path),
+                media_type="application/sql",
+                background=cleanup_task,
             )
         
-        # 验证所有参数都不为None
-        if not parsed_url.hostname:
-            raise HTTPException(status_code=500, detail="数据库URL中未指定主机名")
-        if not parsed_url.username:
-            raise HTTPException(status_code=500, detail="数据库URL中未指定用户名")
-        
-        command = [
-            "pg_dump",
-            "--clean",
-            "--if-exists",
-            "--no-password",  # 避免密码提示
-            "--host", parsed_url.hostname,
-            "--port", str(parsed_url.port or 5432),
-            "--username", parsed_url.username,
-            "--dbname", dbname,
-            "-f", temp_backup_path,
-        ]
-        
-        print(f"--- [调试] pg_dump命令: {' '.join(command)} ---")
-        
-        # 设置密码环境变量
-        env = os.environ.copy()
-        if parsed_url.password:
-            env["PGPASSWORD"] = parsed_url.password
+        # PostgreSQL数据库备份
+        elif db_url.startswith("postgresql://"):
+            print("--- [调试] 检测到PostgreSQL数据库，使用pg_dump备份 ---")
+            
+            # 构建pg_dump命令参数
+            dbname = parsed_url.path.lstrip('/') if parsed_url.path else ""
+            if not dbname:
+                raise HTTPException(
+                    status_code=500,
+                    detail="数据库URL中未指定数据库名"
+                )
+            
+            # 验证所有参数都不为None
+            if not parsed_url.hostname:
+                raise HTTPException(status_code=500, detail="数据库URL中未指定主机名")
+            if not parsed_url.username:
+                raise HTTPException(status_code=500, detail="数据库URL中未指定用户名")
+            
+            command = [
+                "pg_dump",
+                "--clean",
+                "--if-exists",
+                "--no-password",  # 避免密码提示
+                "--host", parsed_url.hostname,
+                "--port", str(parsed_url.port or 5432),
+                "--username", parsed_url.username,
+                "--dbname", dbname,
+                "-f", temp_backup_path,
+            ]
+            
+            print(f"--- [调试] pg_dump命令: {' '.join(command)} ---")
+            
+            # 设置密码环境变量
+            env = os.environ.copy()
+            if parsed_url.password:
+                env["PGPASSWORD"] = parsed_url.password
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"不支持的数据库类型: {db_url.split('://')[0]}"
+            )
             
     except Exception as e:
         raise HTTPException(
