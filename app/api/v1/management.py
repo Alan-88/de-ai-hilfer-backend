@@ -327,16 +327,19 @@ async def intelligent_search_service(
 
 async def export_database_service():
     """
-    使用pg_dump工具导出完整的PostgreSQL数据库作为SQL备份文件。
+    导出数据库备份文件，支持SQLite和PostgreSQL。
 
     Returns:
-        FileResponse: 包含数据库备份的SQL文件，通过后台任务自动清理临时文件
+        FileResponse: 包含数据库备份的文件，通过后台任务自动清理临时文件
+                     - SQLite: .db格式（可直接用数据库工具打开）
+                     - PostgreSQL: .sql格式（SQL脚本文件）
 
     Raises:
         HTTPException: 当数据库URL未设置时返回500，当pg_dump不存在时返回500，当备份失败时返回500
 
     Note:
-        - 使用--clean和--if-exists选项确保恢复时能正确处理现有对象
+        - SQLite: 直接复制数据库文件，保持.db格式，便于查看表结构
+        - PostgreSQL: 使用pg_dump生成SQL脚本，包含完整的表结构和数据
         - 备份文件名包含时间戳便于管理
         - 使用FastAPI的BackgroundTask机制自动清理临时文件
         - 临时文件存储在/tmp目录下
@@ -409,27 +412,94 @@ async def export_database_service():
             if not parsed_url.username:
                 raise HTTPException(status_code=500, detail="数据库URL中未指定用户名")
             
-            command = [
-                "pg_dump",
-                "--clean",
-                "--if-exists",
-                "--no-password",  # 避免密码提示
-                "--host", parsed_url.hostname,
-                "--port", str(parsed_url.port or 5432),
-                "--username", parsed_url.username,
-                "--dbname", dbname,
-                "-f", temp_backup_path,
-            ]
-            
-            print(f"--- [调试] pg_dump命令: {' '.join(command)} ---")
-            
-            # 设置密码环境变量
-            env = os.environ.copy()
-            if parsed_url.password:
-                env["PGPASSWORD"] = parsed_url.password
-            
-            # 执行pg_dump命令
+            # 尝试创建SQLite格式的备份文件（更便于查看）
+            sqlite_backup_path = f"/tmp/de_ai_hilfer_backup_{timestamp}.db"
             try:
+                # 使用SQLAlchemy从PostgreSQL读取数据并写入SQLite
+                from sqlalchemy import create_engine, text
+                import sqlite3
+                
+                print("--- [调试] 尝试创建SQLite格式的备份文件 ---")
+                
+                # 连接到PostgreSQL
+                pg_engine = create_engine(db_url)
+                
+                # 创建SQLite数据库
+                sqlite_conn = sqlite3.connect(sqlite_backup_path)
+                
+                # 获取所有表名
+                with pg_engine.connect() as pg_conn:
+                    result = pg_conn.execute(text("""
+                        SELECT table_name FROM information_schema.tables 
+                        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+                    """))
+                    tables = [row[0] for row in result]
+                    
+                    print(f"--- [调试] 发现表: {tables} ---")
+                    
+                    # 为每个表创建结构和数据
+                    for table in tables:
+                        # 获取表结构
+                        create_result = pg_conn.execute(text(f"""
+                            SELECT sql FROM (
+                                SELECT 
+                                    'CREATE TABLE ' || table_name || ' (' || 
+                                    string_agg(column_name || ' ' || data_type || 
+                                               CASE WHEN character_maximum_length IS NOT NULL 
+                                                    THEN '(' || character_maximum_length || ')' 
+                                                    ELSE '' END, ', ') || ')' as sql
+                                FROM information_schema.columns 
+                                WHERE table_name = '{table}' AND table_schema = 'public'
+                            ) AS create_sql
+                        """))
+                        
+                        create_sql = create_result.scalar()
+                        if create_sql:
+                            sqlite_conn.execute(create_sql)
+                        
+                        # 获取表数据
+                        data_result = pg_conn.execute(text(f"SELECT * FROM {table}"))
+                        columns = data_result.keys()
+                        rows = data_result.fetchall()
+                        
+                        # 插入数据到SQLite
+                        if rows:
+                            placeholders = ','.join(['?' for _ in columns])
+                            insert_sql = f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
+                            sqlite_conn.executemany(insert_sql, rows)
+                    
+                    sqlite_conn.commit()
+                    sqlite_conn.close()
+                    
+                    print("--- [调试] SQLite格式备份创建成功 ---")
+                
+                # 使用SQLite文件作为备份
+                backup_path = sqlite_backup_path
+                media_type = "application/x-sqlite3"
+                
+            except Exception as sqlite_error:
+                print(f"--- [警告] SQLite格式备份失败，回退到SQL格式: {sqlite_error} ---")
+                
+                # 如果SQLite备份失败，使用传统的pg_dump方式
+                command = [
+                    "pg_dump",
+                    "--clean",
+                    "--if-exists",
+                    "--no-password",  # 避免密码提示
+                    "--host", parsed_url.hostname,
+                    "--port", str(parsed_url.port or 5432),
+                    "--username", parsed_url.username,
+                    "--dbname", dbname,
+                    "-f", temp_backup_path,
+                ]
+                
+                print(f"--- [调试] pg_dump命令: {' '.join(command)} ---")
+                
+                # 设置密码环境变量
+                env = os.environ.copy()
+                if parsed_url.password:
+                    env["PGPASSWORD"] = parsed_url.password
+                
                 process = await asyncio.create_subprocess_exec(
                     *command, 
                     stdout=asyncio.subprocess.PIPE, 
@@ -445,28 +515,25 @@ async def export_database_service():
                     if os.path.exists(temp_backup_path):
                         os.remove(temp_backup_path)
                     raise HTTPException(status_code=500, detail=f"数据库备份失败: {error_message}")
+                
+                backup_path = temp_backup_path
+                media_type = "application/sql"
 
-                # 定义一个清理函数
-                def cleanup():
-                    print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
-                    os.remove(temp_backup_path)
+            # 定义清理函数
+            def cleanup():
+                print(f"--- [后台任务] 清理临时备份文件: {backup_path} ---")
+                os.remove(backup_path)
 
-                # 将清理函数包装成一个 BackgroundTask
-                cleanup_task = BackgroundTask(cleanup)
+            # 将清理函数包装成一个 BackgroundTask
+            cleanup_task = BackgroundTask(cleanup)
 
-                # 将 background task 传递给 FileResponse
-                return FileResponse(
-                    path=temp_backup_path,
-                    filename=os.path.basename(temp_backup_path),
-                    media_type="application/sql",
-                    background=cleanup_task,
-                )
-
-            except FileNotFoundError:
-                raise HTTPException(
-                    status_code=HTTPStatusCodes.INTERNAL_SERVER_ERROR,
-                    detail=ErrorMessages.PG_DUMP_NOT_FOUND,
-                )
+            # 将 background task 传递给 FileResponse
+            return FileResponse(
+                path=backup_path,
+                filename=os.path.basename(backup_path),
+                media_type=media_type,
+                background=cleanup_task,
+            )
         else:
             raise HTTPException(
                 status_code=500,
