@@ -359,6 +359,13 @@ async def export_database_service():
         parsed_url = urllib.parse.urlparse(db_url)
         
         # 构建pg_dump命令参数
+        dbname = parsed_url.path.lstrip('/') if parsed_url.path else ""
+        if not dbname:
+            raise HTTPException(
+                status_code=500,
+                detail="数据库URL中未指定数据库名"
+            )
+        
         command = [
             "pg_dump",
             "--clean",
@@ -367,7 +374,7 @@ async def export_database_service():
             "--host", parsed_url.hostname,
             "--port", str(parsed_url.port or 5432),
             "--username", parsed_url.username,
-            "--dbname", parsed_url.path.lstrip('/'),  # 移除开头的斜杠
+            "--dbname", dbname,
             "-f", temp_backup_path,
         ]
         
@@ -509,13 +516,20 @@ async def import_database_service(
             parsed_url = urllib.parse.urlparse(db_url)
             
             # 构建psql命令参数
+            dbname = parsed_url.path.lstrip('/') if parsed_url.path else ""
+            if not dbname:
+                raise HTTPException(
+                    status_code=500,
+                    detail="数据库URL中未指定数据库名"
+                )
+            
             command = [
                 "psql",
                 "--no-password",  # 避免密码提示
                 "--host", parsed_url.hostname,
                 "--port", str(parsed_url.port or 5432),
                 "--username", parsed_url.username,
-                "--dbname", parsed_url.path.lstrip('/'),  # 移除开头的斜杠
+                "--dbname", dbname,
                 "-f", temp_sql_path,
             ]
             
