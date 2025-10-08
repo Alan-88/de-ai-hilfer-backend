@@ -358,6 +358,10 @@ async def export_database_service():
     try:
         parsed_url = urllib.parse.urlparse(db_url)
         
+        # 调试信息
+        print(f"--- [调试] 数据库URL: {db_url} ---")
+        print(f"--- [调试] 解析结果: hostname={parsed_url.hostname}, port={parsed_url.port}, username={parsed_url.username}, dbname={parsed_url.path} ---")
+        
         # 构建pg_dump命令参数
         dbname = parsed_url.path.lstrip('/') if parsed_url.path else ""
         if not dbname:
@@ -365,6 +369,12 @@ async def export_database_service():
                 status_code=500,
                 detail="数据库URL中未指定数据库名"
             )
+        
+        # 验证所有参数都不为None
+        if not parsed_url.hostname:
+            raise HTTPException(status_code=500, detail="数据库URL中未指定主机名")
+        if not parsed_url.username:
+            raise HTTPException(status_code=500, detail="数据库URL中未指定用户名")
         
         command = [
             "pg_dump",
@@ -377,6 +387,8 @@ async def export_database_service():
             "--dbname", dbname,
             "-f", temp_backup_path,
         ]
+        
+        print(f"--- [调试] pg_dump命令: {' '.join(command)} ---")
         
         # 设置密码环境变量
         env = os.environ.copy()
