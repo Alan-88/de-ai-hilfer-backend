@@ -341,20 +341,12 @@ async def export_database_service():
         - 使用FastAPI的BackgroundTask机制自动清理临时文件
         - 临时文件存储在/tmp目录下
         - 支持Render环境的网络连接数据库
-        - 仅支持PostgreSQL数据库，不支持SQLite
     """
     db_url = get_database_url()
     if not db_url:
         raise HTTPException(
             status_code=HTTPStatusCodes.INTERNAL_SERVER_ERROR,
             detail=ErrorMessages.DATABASE_URL_NOT_SET,
-        )
-
-    # 检查数据库类型
-    if not db_url.startswith('postgresql://'):
-        raise HTTPException(
-            status_code=HTTPStatusCodes.BAD_REQUEST,
-            detail="数据库备份功能仅支持PostgreSQL数据库。当前使用的是SQLite，请先配置PostgreSQL数据库。"
         )
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
@@ -365,25 +357,6 @@ async def export_database_service():
     
     try:
         parsed_url = urllib.parse.urlparse(db_url)
-        
-        # 验证必要的URL组件
-        if not parsed_url.hostname:
-            raise HTTPException(
-                status_code=500, 
-                detail="数据库URL中缺少主机名。请确保DATABASE_URL格式正确，例如：postgresql://user:password@host:5432/dbname"
-            )
-        
-        if not parsed_url.username:
-            raise HTTPException(
-                status_code=500, 
-                detail="数据库URL中缺少用户名。请确保DATABASE_URL格式正确，例如：postgresql://user:password@host:5432/dbname"
-            )
-        
-        if not parsed_url.path or parsed_url.path == '/':
-            raise HTTPException(
-                status_code=500, 
-                detail="数据库URL中缺少数据库名。请确保DATABASE_URL格式正确，例如：postgresql://user:password@host:5432/dbname"
-            )
         
         # 构建pg_dump命令参数
         command = [
@@ -534,25 +507,6 @@ async def import_database_service(
         
         try:
             parsed_url = urllib.parse.urlparse(db_url)
-            
-            # 验证必要的URL组件
-            if not parsed_url.hostname:
-                raise HTTPException(
-                    status_code=500, 
-                    detail="数据库URL中缺少主机名"
-                )
-            
-            if not parsed_url.username:
-                raise HTTPException(
-                    status_code=500, 
-                    detail="数据库URL中缺少用户名"
-                )
-            
-            if not parsed_url.path or parsed_url.path == '/':
-                raise HTTPException(
-                    status_code=500, 
-                    detail="数据库URL中缺少数据库名"
-                )
             
             # 构建psql命令参数
             command = [
