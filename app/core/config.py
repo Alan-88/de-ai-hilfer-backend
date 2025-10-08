@@ -8,19 +8,27 @@ import json
 from typing import Optional, List
 
 from pydantic import Field, validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class DatabaseConfig(BaseSettings):
     """数据库配置类"""
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore"
+    )
 
-    url: str = Field("sqlite:///./de_ai_hilfer.db", env="DATABASE_URL", description="数据库连接URL")
-    echo: bool = Field(False, env="DB_ECHO", description="是否打印SQL语句")
-    pool_size: int = Field(5, env="DB_POOL_SIZE", description="连接池大小")
-    max_overflow: int = Field(10, env="DB_MAX_OVERFLOW", description="连接池最大溢出")
+    database_url: str = Field(default="sqlite:///./de_ai_hilfer.db", description="数据库连接URL")
+    echo: bool = Field(default=False, description="是否打印SQL语句")
+    pool_size: int = Field(default=5, description="连接池大小")
+    max_overflow: int = Field(default=10, description="连接池最大溢出")
 
-    class Config:
-        env_prefix = "DB_"
+    @property
+    def url(self) -> str:
+        """获取数据库URL，兼容旧代码"""
+        return self.database_url
 
 
 class APIConfig(BaseSettings):
