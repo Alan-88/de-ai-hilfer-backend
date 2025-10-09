@@ -67,12 +67,14 @@ def get_learning_session_service(db: Session, limit_new_words: int = 5) -> dict:
     )
     
     # 获取新单词（还没有学习进度的单词）
-    learned_entry_ids = {progress.entry_id for progress in review_words}
+    # 修复：获取所有已有学习进度的单词ID，而不是仅仅复习单词
+    all_learned_progress = db.query(models.LearningProgress.entry_id).all()
+    all_learned_entry_ids = {progress.entry_id for progress in all_learned_progress}
     
     new_words = (
         db.query(models.KnowledgeEntry)
-        .filter(models.KnowledgeEntry.id.notin_(learned_entry_ids))
-        .filter(models.KnowledgeEntry.entry_type == 'WORD')  # 只学习单词类型
+        .filter(models.KnowledgeEntry.id.notin_(all_learned_entry_ids))
+        .filter(models.KnowledgeEntry.entry_type == 'WORD')
         .limit(limit_new_words)
         .all()
     )
