@@ -3,6 +3,7 @@ import datetime
 from sqlalchemy import (
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -113,3 +114,22 @@ class FollowUp(Base):
 
     def __repr__(self):
         return f"<FollowUp(question='{self.question[:20]}...', entry='{self.entry.query_text}')>"
+
+
+class LearningProgress(Base):
+    __tablename__ = 'learning_progress'
+    id = Column(Integer, primary_key=True, index=True)
+    entry_id = Column(Integer, ForeignKey('knowledge_entries.id'), nullable=False, index=True)
+    
+    # 间隔重复算法核心字段
+    mastery_level = Column(Integer, default=0, nullable=False)
+    review_count = Column(Integer, default=0, nullable=False)
+    next_review_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    last_reviewed_at = Column(DateTime, nullable=True)
+    ease_factor = Column(Float, default=2.5, nullable=False)
+    interval = Column(Integer, default=0, nullable=False) # 单位：天
+
+    entry = relationship("KnowledgeEntry")
+
+    def __repr__(self):
+        return f"<LearningProgress(entry_id={self.entry_id}, next_review='{self.next_review_at.date()}')>"

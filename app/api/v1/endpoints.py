@@ -9,6 +9,9 @@ from sqlalchemy.orm import Session
 
 from ai_adapter.llm_router import LLMRouter
 
+# 导入学习模块
+from app.api.v1.learning_endpoints import router as learning_router
+
 # 导入管理层
 from app.api.v1.management import (
     create_alias_service,
@@ -364,3 +367,11 @@ def debug_cors():
         "cors_origins": settings.api.cors_origins,
         "environment": settings.environment
     }
+
+
+# =================================================================================
+# 5. 包含学习模块路由 (Include Learning Module Routes)
+# =================================================================================
+
+# 包含学习模块的路由，添加 /learning 前缀
+router.include_router(learning_router, prefix="/learning", tags=["Learning"])
