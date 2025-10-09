@@ -12,6 +12,128 @@ De-AI-Hilfer-Backend 提供了一套完整的 RESTful API，用于德语学习�
 
 ## API 端点列表
 
+### 🎓 智能化背单词模块 (v4.0.0+)
+
+#### 获取学习会话
+- **端点**: `GET /learning/session`
+- **描述**: 获取当天需要复习的单词和新单词，返回完整的学习会话数据
+- **响应**: `LearningSessionResponse`
+
+**示例响应**:
+\`\`\`json
+{
+  "new_words": [
+    {
+      "id": 1,
+      "word": "Haus",
+      "word_type": "n.",
+      "translation": "房子；住宅；家庭",
+      "definition": "指人们居住的建筑物"
+    }
+  ],
+  "review_words": [
+    {
+      "id": 2,
+      "word": "gehen",
+      "word_type": "v.",
+      "translation": "去；走；进行",
+      "definition": "表示移动或进行某动作"
+    }
+  ],
+  "total_count": 10,
+  "new_count": 3,
+  "review_count": 7
+}
+\`\`\`
+
+#### 添加单词到学习计划
+- **端点**: `POST /learning/add/{entry_id}`
+- **描述**: 将指定的知识条目添加到用户的学习计划中
+- **参数**: `entry_id` (path) - 知识条目ID
+- **响应**: `{"message": "成功将单词添加到学习计划"}`
+
+#### 提交复习结果
+- **端点**: `POST /learning/review/{entry_id}`
+- **描述**: 提交对某个单词的复习结果，更新学习进度
+- **参数**: `entry_id` (path) - 知识条目ID
+- **请求体**: `{"quality": 3}` - 记忆质量评分 (0-5)
+- **响应**: `LearningProgressResponse`
+
+**质量评分说明**:
+- 0: 完全忘记
+- 1: 忘记
+- 2: 困难（看了提示才记起）
+- 3: 掌握
+- 4: 容易
+- 5: 太简单
+
+**示例响应**:
+\`\`\`json
+{
+  "mastery_level": 2,
+  "review_count": 3,
+  "next_review_at": "2025-10-12T00:00:00Z",
+  "ease_factor": 2.3,
+  "interval": 6
+}
+\`\`\`
+
+#### 获取深度解析提示
+- **端点**: `GET /learning/insight/{entry_id}`
+- **描述**: 获取单词的深度解析内容，用于"二次机会"学习流程
+- **参数**: `entry_id` (path) - 知识条目ID
+- **响应**: `{"insight": "深度解析内容..."}`
+
+#### AI生成例句
+- **端点**: `POST /learning/generate-example/{entry_id}`
+- **描述**: 使用AI为指定单词生成符合B1水平的德语例句和中文翻译
+- **参数**: `entry_id` (path) - 知识条目ID
+- **响应**: `ExampleSentenceResponse`
+
+**示例响应**:
+\`\`\`json
+{
+  "sentence": "Das Haus ist sehr groß und hat einen schönen Garten.",
+  "translation": "这座房子很大，有一个美丽的花园。"
+}
+\`\`\`
+
+#### AI生成智能题目
+- **端点**: `POST /learning/generate-quiz/{entry_id}`
+- **描述**: 使用AI为指定单词生成同义词辨析选择题
+- **参数**: `entry_id` (path) - 知识条目ID
+- **响应**: `QuizResponse`
+
+**示例响应**:
+\`\`\`json
+{
+  "question": "Welches Wort passt am besten in den Satz: "Ich möchte in mein ____ gehen?"",
+  "options": ["Haus", "Gebäude", "Wohnung", "Heim"],
+  "answer": "Haus"
+}
+\`\`\`
+
+#### 获取学习统计
+- **端点**: `GET /learning/stats`
+- **描述**: 获取用户的学习统计数据，包括进度、连续学习天数等
+- **响应**: `LearningStatsResponse`
+
+**示例响应**:
+\`\`\`json
+{
+  "total_words": 150,
+  "learned_today": 10,
+  "reviewed_today": 25,
+  "streak_days": 7,
+  "mastery_distribution": {
+    "new": 20,
+    "learning": 80,
+    "review": 40,
+    "mature": 10
+  }
+}
+\`\`\`
+
 ### 🔍 查询端点
 
 #### 获取最近查询的条目
@@ -304,6 +426,13 @@ def get_preview_from_analysis(analysis: str) -> str:
 }
 \`\`\`
 
+#### ReviewRequest (学习模块)
+\`\`\`json
+{
+  "quality": "integer"          // 必需：记忆质量评分 (0-5)
+}
+\`\`\`
+
 ### 响应模型
 
 #### AnalyzeResponse
@@ -344,6 +473,81 @@ def get_preview_from_analysis(analysis: str) -> str:
   "question": "string",             // 问题内容
   "answer": "string",               // 回答内容
   "timestamp": "string"              // 时间戳（ISO 8601格式）
+}
+\`\`\`
+
+### 学习模块响应模型
+
+#### LearningSessionResponse
+\`\`\`json
+{
+  "new_words": "WordItem[]",        // 新单词列表
+  "review_words": "WordItem[]",     // 复习单词列表
+  "total_count": "integer",         // 总单词数
+  "new_count": "integer",           // 新单词数量
+  "review_count": "integer"         // 复习单词数量
+}
+\`\`\`
+
+#### WordItem
+\`\`\`json
+{
+  "id": "integer",                  // 单词ID
+  "word": "string",                 // 德语单词
+  "word_type": "string",            // 词性
+  "translation": "string",          // 中文翻译
+  "definition": "string"            // 定义说明
+}
+\`\`\`
+
+#### LearningProgressResponse
+\`\`\`json
+{
+  "mastery_level": "integer",       // 掌握等级
+  "review_count": "integer",        // 复习次数
+  "next_review_at": "string",       // 下次复习时间（ISO 8601格式）
+  "ease_factor": "number",          // 难度系数
+  "interval": "integer"             // 复习间隔（天）
+}
+\`\`\`
+
+#### InsightResponse
+\`\`\`json
+{
+  "insight": "string"               // 深度解析内容
+}
+\`\`\`
+
+#### ExampleSentenceResponse
+\`\`\`json
+{
+  "sentence": "string",             // 德语例句
+  "translation": "string"           // 中文翻译
+}
+\`\`\`
+
+#### QuizResponse
+\`\`\`json
+{
+  "question": "string",             // 题目文本
+  "options": "string[]",            // 选项列表
+  "answer": "string"                // 正确答案
+}
+\`\`\`
+
+#### LearningStatsResponse
+\`\`\`json
+{
+  "total_words": "integer",         // 总学习单词数
+  "learned_today": "integer",       // 今日学习新词数
+  "reviewed_today": "integer",      // 今日复习单词数
+  "streak_days": "integer",         // 连续学习天数
+  "mastery_distribution": {         // 掌握程度分布
+    "new": "integer",               // 新单词
+    "learning": "integer",          // 学习中
+    "review": "integer",            // 复习中
+    "mature": "integer"             // 已掌握
+  }
 }
 \`\`\`
 
@@ -446,6 +650,47 @@ curl -X POST "http://localhost:8000/api/v1/intelligent-search" \
   }'
 \`\`\`
 
+### 智能化背单词模块流程
+
+1. **获取学习会话**
+\`\`\`bash
+curl -X GET "http://localhost:8000/api/v1/learning/session"
+\`\`\`
+
+2. **添加单词到学习计划**
+\`\`\`bash
+curl -X POST "http://localhost:8000/api/v1/learning/add/1"
+\`\`\`
+
+3. **提交复习结果**
+\`\`\`bash
+curl -X POST "http://localhost:8000/api/v1/learning/review/1" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "quality": 3
+  }'
+\`\`\`
+
+4. **获取深度解析提示**
+\`\`\`bash
+curl -X GET "http://localhost:8000/api/v1/learning/insight/1"
+\`\`\`
+
+5. **AI生成例句**
+\`\`\`bash
+curl -X POST "http://localhost:8000/api/v1/learning/generate-example/1"
+\`\`\`
+
+6. **AI生成智能题目**
+\`\`\`bash
+curl -X POST "http://localhost:8000/api/v1/learning/generate-quiz/1"
+\`\`\`
+
+7. **获取学习统计**
+\`\`\`bash
+curl -X GET "http://localhost:8000/api/v1/learning/stats"
+\`\`\`
+
 ### 数据库管理
 
 \`\`\`bash
@@ -479,9 +724,39 @@ curl -X POST "http://localhost:8000/api/v1/import" \
 
 ## 版本信息
 
-- **当前版本**: v3.8.0
+- **当前版本**: v4.0.0
 - **API版本**: v1
-- **更新日期**: 2025-10-07
+- **更新日期**: 2025-10-09
+
+### v4.0.0 更新内容 (2025-10-09)
+
+#### 🎓 智能化背单词模块
+- **新增**: 完整的间隔重复学习系统 (基于SuperMemo-2算法)
+- **新增**: "二次机会"启发式学习流程
+- **新增**: AI动态生成例句功能
+- **新增**: AI智能出题功能 (同义词辨析选择题)
+- **新增**: 学习进度统计和可视化
+- **新增**: 7个核心学习API端点
+
+#### 📊 数据库扩展
+- **新增**: `learning_progress` 表，支持SRS算法
+- **新增**: 数据库迁移脚本
+- **优化**: 索引性能提升
+
+#### 🤖 AI功能增强
+- **新增**: 动态例句生成Prompt模板
+- **新增**: 智能出题Prompt模板
+- **优化**: AI响应解析和错误处理
+
+#### 📚 文档完善
+- **新增**: 前端集成指南
+- **更新**: 完整的API文档
+- **新增**: 学习模块使用示例
+
+### v3.8.0 更新内容 (2025-10-07)
+- **新增**: 智能感知预览系统
+- **优化**: 词缀和单词的智能识别
+- **改进**: 预览文本提取算法
 
 ## 支持
 
@@ -493,4 +768,4 @@ curl -X POST "http://localhost:8000/api/v1/import" \
 
 ---
 
-*最后更新: 2025-10-07*
+*最后更新: 2025-10-09*
