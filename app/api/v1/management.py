@@ -361,14 +361,9 @@ async def export_database_service():
     try:
         parsed_url = urllib.parse.urlparse(db_url)
         
-        # 调试信息
-        print(f"--- [调试] 数据库URL: {db_url} ---")
-        print(f"--- [调试] 解析结果: hostname={parsed_url.hostname}, port={parsed_url.port}, username={parsed_url.username}, dbname={parsed_url.path} ---")
-        
         # 检查数据库类型
         if db_url.startswith("sqlite://"):
             # SQLite数据库备份
-            print("--- [调试] 检测到SQLite数据库，使用文件复制方式备份 ---")
             import shutil
             sqlite_db_path = parsed_url.path  # 获取SQLite数据库文件路径
             if not sqlite_db_path or not os.path.exists(sqlite_db_path):
@@ -382,7 +377,6 @@ async def export_database_service():
             
             # 定义清理函数
             def cleanup():
-                print(f"--- [后台任务] 清理临时备份文件: {temp_backup_path} ---")
                 os.remove(temp_backup_path)
 
             cleanup_task = BackgroundTask(cleanup)
@@ -396,8 +390,6 @@ async def export_database_service():
         
         # PostgreSQL数据库备份
         elif db_url.startswith("postgresql://"):
-            print("--- [调试] 检测到PostgreSQL数据库，使用pg_dump备份 ---")
-            
             # 构建pg_dump命令参数
             dbname = parsed_url.path.lstrip('/') if parsed_url.path else ""
             if not dbname:
@@ -419,8 +411,6 @@ async def export_database_service():
                 from sqlalchemy import create_engine, text
                 import sqlite3
                 
-                print("--- [调试] 尝试创建SQLite格式的备份文件 ---")
-                
                 # 连接到PostgreSQL
                 pg_engine = create_engine(db_url)
                 
@@ -434,8 +424,6 @@ async def export_database_service():
                         WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
                     """))
                     tables = [row[0] for row in result]
-                    
-                    print(f"--- [调试] 发现表: {tables} ---")
                     
                     # 为每个表创建结构和数据
                     for table in tables:
@@ -470,8 +458,6 @@ async def export_database_service():
                     sqlite_conn.commit()
                     sqlite_conn.close()
                     
-                    print("--- [调试] SQLite格式备份创建成功 ---")
-                
                 # 使用SQLite文件作为备份
                 backup_path = sqlite_backup_path
                 media_type = "application/x-sqlite3"
@@ -491,8 +477,6 @@ async def export_database_service():
                     "--dbname", dbname,
                     "-f", temp_backup_path,
                 ]
-                
-                print(f"--- [调试] pg_dump命令: {' '.join(command)} ---")
                 
                 # 设置密码环境变量
                 env = os.environ.copy()
