@@ -116,6 +116,7 @@ class RecentItem(BaseModel):
     用于在 /recent 端点中展示单个最近查询的条目摘要。
     """
 
+    entry_id: int = Field(..., description="知识条目的唯一标识符")
     query_text: str = Field(..., description="查询的文本内容")
     preview: str = Field(..., description="条目内容的预览")
 
