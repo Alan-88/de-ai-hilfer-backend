@@ -284,6 +284,41 @@ async def generate_synonym_quiz(
 # =================================================================================
 
 
+@router.get("/progress", tags=["Learning"])
+def get_learning_progress(db: Session = Depends(get_db)) -> Dict:
+    """
+    获取所有单词的学习进度信息
+    
+    Args:
+        db (Session): 数据库会话
+        
+    Returns:
+        Dict: 包含所有学习进度信息的响应
+        
+    Note:
+        - 用于词库管理中判断单词学习状态
+        - 返回entry_id到学习进度的映射
+    """
+    progress_list = db.query(models.LearningProgress).all()
+    
+    progress_map = {}
+    for progress in progress_list:
+        progress_map[progress.entry_id] = {
+            "id": progress.id,
+            "entry_id": progress.entry_id,
+            "mastery_level": progress.mastery_level,
+            "review_count": progress.review_count,
+            "next_review_at": progress.next_review_at.isoformat(),
+            "last_reviewed_at": progress.last_reviewed_at.isoformat() if progress.last_reviewed_at else None,
+            "ease_factor": progress.ease_factor,
+            "interval": progress.interval
+        }
+    
+    return {
+        "progress": progress_map
+    }
+
+
 @router.get("/stats", tags=["Learning"])
 def get_learning_stats(db: Session = Depends(get_db)) -> Dict:
     """
