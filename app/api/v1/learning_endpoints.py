@@ -3,7 +3,7 @@
 """
 
 import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
@@ -17,7 +17,11 @@ from app.api.v1.learning_service import (
     get_learning_session_service,
     get_word_insight_service,
     update_learning_progress_service,
+    get_learning_session_service_v2,
+    update_learning_progress_service_v2,
 )
+from app.core.state import get_daily_learning_session
+from app.schemas.dictionary import LearningSessionResponse, LearningProgressResponse
 from app.core.llm_service import get_llm_router
 from app.db import models
 from app.db.session import get_db
@@ -361,3 +365,41 @@ def get_learning_stats(db: Session = Depends(get_db)) -> Dict:
             for level, count in mastery_stats
         ]
     }
+
+
+# =================================================================================
+# 5. 学习模块 V2 - 每日动态学习队列
+# =================================================================================
+
+
+@router.get("/session/v2", response_model=LearningSessionResponse, tags=["Learning V2"])
+def get_learning_session_v2(
+    limit_new_words: int = 5,
+    db: Session = Depends(get_db),
+    daily_session: Dict[str, Any] = Depends(get_daily_learning_session)
+):
+    """
+    获取学习会话 V2: 从每日动态队列中获取一个单词及当前进度。
+    """
+    session_data = get_learning_session_service_v2(db, daily_session, limit_new_words)
+    return session_data
+
+
+@router.post("/review/v2/{entry_id}", response_model=LearningProgressResponse, tags=["Learning V2"])
+def submit_review_result_v2(
+    entry_id: int,
+    quality: int,
+    db: Session = Depends(get_db),
+    daily_session: Dict[str, Any] = Depends(get_daily_learning_session)
+):
+    """
+    提交复习结果 V2: 更新每日队列和核心SRS数据。
+    """
+    if not 0 <= quality <= 5:
+        raise HTTPException(status_code=400, detail="质量评分必须在0-5之间")
+    
+    try:
+        updated_progress = update_learning_progress_service_v2(entry_id, quality, db, daily_session)
+        return updated_progress
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

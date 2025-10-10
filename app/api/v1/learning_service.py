@@ -1,18 +1,183 @@
 """
-学习模块服务层：包含间隔重复算法和学习相关业务逻辑
+学习模块服务层 V2：包含基于每日动态队列的间隔重复算法
 """
 
 import datetime
 import json
 import re
-from typing import List, Optional
+import random
+from typing import List, Optional, Dict, Any
 
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from ai_adapter.llm_router import LLMRouter
 from app.core.llm_service import call_llm_service
 from app.db import models
 
+# --- 算法常量 ---
+NEW_WORD_REPETITIONS = 3
+REVIEW_WORD_REPETITIONS = 1
+FAILED_WORD_REPETITIONS = 2
+
+def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, Any]]:
+    """
+    生成全新的每日学习队列。
+    """
+    queue = []
+    today = datetime.datetime.utcnow().date()
+    
+    # 1. 获取所有需要复习的单词
+    review_progress = (
+        db.query(models.LearningProgress)
+        .filter(models.LearningProgress.next_review_at <= today)
+        .all()
+    )
+    
+    for progress in review_progress:
+        queue.append({
+            "entry_id": progress.entry_id,
+            "repetitions_left": REVIEW_WORD_REPETITIONS,
+            "progress": progress # 附加完整的 progress 对象
+        })
+
+    # 2. 获取新单词
+    learned_entry_ids = {p.entry_id for p in db.query(models.LearningProgress).all()}
+    
+    new_word_entries = (
+        db.query(models.KnowledgeEntry)
+        .filter(models.KnowledgeEntry.id.notin_(learned_entry_ids))
+        .limit(limit_new_words)
+        .all()
+    )
+
+    for entry in new_word_entries:
+        # 为新词创建一个临时的、未保存的 LearningProgress 对象
+        temp_progress = models.LearningProgress(entry_id=entry.id)
+        queue.append({
+            "entry_id": entry.id,
+            "repetitions_left": NEW_WORD_REPETITIONS,
+            "progress": temp_progress 
+        })
+        
+    random.shuffle(queue)
+    return queue
+
+def get_learning_session_service_v2(
+    db: Session, 
+    daily_session: Dict[str, Any],
+    limit_new_words: int = 5
+) -> Dict[str, Any]:
+    """
+    获取学习会话 V2:
+    - 如果队列为空，则生成新队列。
+    - 从队列中智能选择一个单词。
+    - 返回当前单词和会话进度。
+    """
+    if not daily_session.get("queue"):
+        new_queue = _generate_daily_queue(db, limit_new_words)
+        daily_session["queue"] = new_queue
+        daily_session["initial_count"] = len(new_queue)
+
+    active_queue = [word for word in daily_session["queue"] if word["repetitions_left"] > 0]
+
+    if not active_queue:
+        return {
+            "current_word": None,
+            "completed_count": daily_session["initial_count"],
+            "total_count": daily_session["initial_count"],
+            "is_completed": True,
+        }
+
+    # 简单的随机选择策略
+    current_word_data = random.choice(active_queue)
+    entry = db.query(models.KnowledgeEntry).get(current_word_data["entry_id"])
+
+    # 包装成前端需要的格式
+    current_word_for_frontend = {
+        "entry_id": entry.id,
+        "query_text": entry.query_text,
+        "analysis_markdown": entry.analysis_markdown,
+        "repetitions_left": current_word_data["repetitions_left"],
+        "progress": current_word_data["progress"]
+    }
+    
+    completed_count = daily_session["initial_count"] - len(set(w["entry_id"] for w in active_queue))
+
+    return {
+        "current_word": current_word_for_frontend,
+        "completed_count": completed_count,
+        "total_count": daily_session["initial_count"],
+        "is_completed": False,
+    }
+
+def update_learning_progress_service_v2(
+    entry_id: int, 
+    quality: int, 
+    db: Session, 
+    daily_session: Dict[str, Any]
+):
+    """
+    更新学习进度 V2:
+    - 更新每日队列中的重复次数。
+    - 异步更新数据库中的 SRS 数据。
+    """
+    # 1. 更新内存中的每日队列
+    word_in_queue = next((word for word in daily_session["queue"] if word["entry_id"] == entry_id), None)
+    
+    if not word_in_queue:
+        raise ValueError("单词不在当前学习会话中")
+
+    if quality < 4:
+        # 如果答错了，增加重复次数
+        word_in_queue["repetitions_left"] += FAILED_WORD_REPETITIONS
+    else:
+        # 答对了，减少一次
+        word_in_queue["repetitions_left"] = max(0, word_in_queue["repetitions_left"] - 1)
+        
+    # 2. 更新数据库中的核心 SRS 数据
+    progress = (
+        db.query(models.LearningProgress)
+        .filter(models.LearningProgress.entry_id == entry_id)
+        .first()
+    )
+    
+    # 如果是新词，先创建 LearningProgress 记录
+    if not progress:
+        progress = models.LearningProgress(entry_id=entry_id)
+        db.add(progress)
+    
+    # 沿用之前的 SM-2 算法更新 SRS 核心数据
+    if quality < 3:
+        progress.mastery_level = 0
+        progress.interval = 0 
+        progress.ease_factor = max(1.3, progress.ease_factor - (0.20 if quality < 2 else 0.15))
+    else:
+        if progress.mastery_level == 0:
+            progress.interval = 1
+        elif progress.mastery_level == 1:
+            progress.interval = 6
+        else:
+            progress.interval = round(progress.interval * progress.ease_factor)
+        
+        progress.mastery_level += 1
+        progress.ease_factor += (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+        if progress.ease_factor < 1.3:
+            progress.ease_factor = 1.3
+            
+    progress.review_count += 1
+    progress.last_reviewed_at = datetime.datetime.utcnow()
+    progress.next_review_at = progress.last_reviewed_at + datetime.timedelta(days=progress.interval)
+    
+    db.commit()
+    db.refresh(progress)
+    
+    # 更新内存队列中的 progress 对象
+    word_in_queue["progress"] = progress
+
+    return progress
+
+# --- 保留原有的其他服务函数 ---
 
 def update_learning_progress_service(progress: models.LearningProgress, quality: int, db: Session):
     """
