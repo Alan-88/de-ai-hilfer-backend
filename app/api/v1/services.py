@@ -326,6 +326,7 @@ def get_all_entries_service(db: Session) -> list[RecentItem]:
     for entry in all_entries:
         response_items.append(
             RecentItem(
+                entry_id=entry.id,
                 query_text=entry.query_text,
                 preview=get_cached_preview(entry.analysis_markdown),
             )
