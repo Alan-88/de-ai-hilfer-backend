@@ -15,6 +15,7 @@ _daily_learning_session: Dict[str, Any] = {
     "date": None,
     "queue": [],
     "initial_count": 0,
+    "last_shown_entry_id": None,  # 新增此行
 }
 
 def get_daily_learning_session() -> Dict[str, Any]:
@@ -25,4 +26,5 @@ def get_daily_learning_session() -> Dict[str, Any]:
         _daily_learning_session["date"] = today
         _daily_learning_session["queue"] = []
         _daily_learning_session["initial_count"] = 0
+        _daily_learning_session["last_shown_entry_id"] = None  # 在重置时也清空
     return _daily_learning_session
