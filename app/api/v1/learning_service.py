@@ -79,9 +79,24 @@ def get_learning_session_service(db: Session, limit_new_words: int = 5) -> dict:
         .all()
     )
     
+    # 为新单词创建学习进度记录，确保前端可以正常提交复习结果
+    new_words_with_progress = []
+    for word in new_words:
+        # 创建学习进度记录
+        new_progress = models.LearningProgress(
+            entry_id=word.id,
+            next_review_at=datetime.datetime.utcnow()  # 立即可学习
+        )
+        db.add(new_progress)
+        db.commit()
+        db.refresh(new_progress)
+        
+        # 将新单词包装成与复习单词相同的数据结构
+        new_words_with_progress.append(new_progress)
+    
     return {
         "review_words": review_words,
-        "new_words": new_words
+        "new_words": new_words_with_progress  # 返回带有学习进度记录的新单词
     }
 
 
