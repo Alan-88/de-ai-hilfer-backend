@@ -22,7 +22,7 @@ def update_learning_progress_service(progress: models.LearningProgress, quality:
     if quality < 3:
         # 记忆失败，重置学习周期
         progress.mastery_level = 0
-        progress.interval = 1
+        progress.interval = 0  # 立即需要再次复习
         # 对 ease_factor 进行惩罚
         if quality == 2: # 看了提示才记起
             progress.ease_factor = max(1.3, progress.ease_factor - 0.15)
