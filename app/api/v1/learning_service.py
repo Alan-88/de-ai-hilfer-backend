@@ -19,6 +19,7 @@ from app.db import models
 NEW_WORD_REPETITIONS = 3
 REVIEW_WORD_REPETITIONS = 1
 FAILED_WORD_REPETITIONS = 2
+ACTIVE_POOL_SIZE = 7  # 定义"聚焦学习池"的大小，7是个不错的选择
 
 def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, Any]]:
     """
@@ -64,36 +65,61 @@ def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, A
     return queue
 
 def get_learning_session_service_v2(
-    db: Session, 
+    db: Session,
     daily_session: Dict[str, Any],
     limit_new_words: int = 5
 ) -> Dict[str, Any]:
     """
-    获取学习会话 V2:
-    - 如果队列为空，则生成新队列。
-    - 从队列中智能选择一个单词。
-    - 返回当前单词和会话进度。
+    获取学习会话 V3 (智能选择版):
+    - 引入"聚焦学习池" (Active Pool) 概念，实现局部轮换。
+    - 确保单词不会连续出现。
     """
     if not daily_session.get("queue"):
         new_queue = _generate_daily_queue(db, limit_new_words)
         daily_session["queue"] = new_queue
         daily_session["initial_count"] = len(new_queue)
+        daily_session["last_shown_entry_id"] = None
 
     active_queue = [word for word in daily_session["queue"] if word["repetitions_left"] > 0]
 
     if not active_queue:
+        # 清空会话，以便下次可以重新开始
+        daily_session["queue"] = []
+        daily_session["initial_count"] = 0
+        daily_session["last_shown_entry_id"] = None
         return {
             "current_word": None,
-            "completed_count": daily_session["initial_count"],
-            "total_count": daily_session["initial_count"],
+            "completed_count": daily_session.get("initial_count", 0),
+            "total_count": daily_session.get("initial_count", 0),
             "is_completed": True,
         }
 
-    # 简单的随机选择策略
-    current_word_data = random.choice(active_queue)
+    # --- 智能选择算法 ---
+
+    # 1. 过滤掉上一个单词 (避免连续重复)
+    last_id = daily_session.get("last_shown_entry_id")
+    candidate_pool = [word for word in active_queue if word["entry_id"] != last_id]
+    
+    # 如果过滤后只剩一个或没有了，就不过滤，防止卡死
+    if not candidate_pool:
+        candidate_pool = active_queue
+
+    # 2. 创建"聚焦学习池" (Active Pool)
+    # 优先选择重复次数更多的单词，实现对难点的聚焦
+    candidate_pool.sort(key=lambda x: x["repetitions_left"], reverse=True)
+    
+    # 取前 N 个最需要学习的单词形成一个小的轮换池
+    focus_pool = candidate_pool[:ACTIVE_POOL_SIZE]
+
+    # 3. 从聚焦池中随机选择一个单词
+    current_word_data = random.choice(focus_pool)
+    
+    # 4. 更新"上一个单词"的记录
+    daily_session["last_shown_entry_id"] = current_word_data["entry_id"]
+
+    # --- 后续逻辑不变 ---
     entry = db.query(models.KnowledgeEntry).get(current_word_data["entry_id"])
 
-    # 包装成前端需要的格式
     current_word_for_frontend = {
         "entry_id": entry.id,
         "query_text": entry.query_text,
@@ -101,7 +127,7 @@ def get_learning_session_service_v2(
         "repetitions_left": current_word_data["repetitions_left"],
         "progress": current_word_data["progress"]
     }
-    
+
     completed_count = daily_session["initial_count"] - len(set(w["entry_id"] for w in active_queue))
 
     return {
