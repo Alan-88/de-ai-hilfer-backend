@@ -63,7 +63,8 @@ def get_learning_session(
                 "last_reviewed_at": progress.last_reviewed_at.isoformat() if progress.last_reviewed_at else None,
                 "ease_factor": progress.ease_factor,
                 "interval": progress.interval,
-                "preview": progress.entry.analysis_markdown[:100] + "..." if len(progress.entry.analysis_markdown) > 100 else progress.entry.analysis_markdown
+                "preview": progress.entry.analysis_markdown[:100] + "..." if len(progress.entry.analysis_markdown) > 100 else progress.entry.analysis_markdown,
+                "analysis_markdown": progress.entry.analysis_markdown
             }
             for progress in session_data["review_words"]
         ],
@@ -72,7 +73,8 @@ def get_learning_session(
                 "id": entry.id,
                 "query_text": entry.query_text,
                 "entry_type": entry.entry_type,
-                "preview": entry.analysis_markdown[:100] + "..." if len(entry.analysis_markdown) > 100 else entry.analysis_markdown
+                "preview": entry.analysis_markdown[:100] + "..." if len(entry.analysis_markdown) > 100 else entry.analysis_markdown,
+                "analysis_markdown": entry.analysis_markdown
             }
             for entry in session_data["new_words"]
         ]
