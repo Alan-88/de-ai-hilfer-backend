@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import List, Literal, Union, Optional
+import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -183,3 +184,32 @@ class DatabaseImportRequest(BaseModel):
     """
 
     file_path: str = Field(..., description="用户提供的备份数据库文件的完整路径。")
+
+
+# --- 学习模块 V2 ---
+
+class LearningSessionWord(BaseModel):
+    """每日学习队列中的单词模型"""
+    entry_id: int
+    query_text: str
+    analysis_markdown: str
+    repetitions_left: int
+    # 包含了完整的学习进度信息，用于前端自适应模式切换
+    progress: Optional["LearningProgressResponse"] = None 
+
+class LearningSessionResponse(BaseModel):
+    """新的学习会话响应模型"""
+    current_word: Optional[LearningSessionWord] = None
+    completed_count: int
+    total_count: int
+    is_completed: bool
+
+class LearningProgressResponse(BaseModel):
+    """学习进度的数据模型"""
+    mastery_level: int
+    review_count: int
+    next_review_at: datetime.datetime
+    last_reviewed_at: Optional[datetime.datetime] = None
+    ease_factor: float
+    interval: int
+    model_config = ConfigDict(from_attributes=True)
