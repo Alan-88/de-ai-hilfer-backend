@@ -55,10 +55,11 @@ def update_learning_progress_service(progress: models.LearningProgress, quality:
 def get_learning_session_service(db: Session, limit_new_words: int = 5) -> dict:
     """
     获取学习会话：包括需要复习的单词和新单词
+    修复：只返回用户明确添加到学习计划的单词
     """
     today = datetime.datetime.utcnow()
     
-    # 获取需要复习的单词
+    # 获取需要复习的单词（用户已添加到学习计划的单词）
     review_words = (
         db.query(models.LearningProgress)
         .filter(models.LearningProgress.next_review_at <= today)
@@ -66,37 +67,15 @@ def get_learning_session_service(db: Session, limit_new_words: int = 5) -> dict:
         .all()
     )
     
-    # 获取新单词（还没有学习进度的单词）
-    # 修复：获取所有已有学习进度的单词ID，而不是仅仅复习单词
-    all_learned_progress = db.query(models.LearningProgress.entry_id).all()
-    all_learned_entry_ids = {progress.entry_id for progress in all_learned_progress}
+    # 修复：不再自动从未学习的单词中获取新词
+    # 新单词应该只通过用户明确调用 /add/{entry_id} 接口添加
+    # 这样确保只有用户选择的单词才会进入学习列表
     
-    new_words = (
-        db.query(models.KnowledgeEntry)
-        .filter(models.KnowledgeEntry.id.notin_(all_learned_entry_ids))
-        .filter(models.KnowledgeEntry.entry_type == 'WORD')
-        .limit(limit_new_words)
-        .all()
-    )
-    
-    # 为新单词创建学习进度记录，确保前端可以正常提交复习结果
-    new_words_with_progress = []
-    for word in new_words:
-        # 创建学习进度记录
-        new_progress = models.LearningProgress(
-            entry_id=word.id,
-            next_review_at=datetime.datetime.utcnow()  # 立即可学习
-        )
-        db.add(new_progress)
-        db.commit()
-        db.refresh(new_progress)
-        
-        # 将新单词包装成与复习单词相同的数据结构
-        new_words_with_progress.append(new_progress)
+    new_words_with_progress = []  # 空列表，等待用户主动添加单词
     
     return {
         "review_words": review_words,
-        "new_words": new_words_with_progress  # 返回带有学习进度记录的新单词
+        "new_words": new_words_with_progress
     }
 
 
