@@ -26,7 +26,7 @@ def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, A
     生成全新的每日学习队列。
     """
     queue = []
-    today = datetime.datetime.utcnow().date()
+    today = datetime.datetime.now(datetime.timezone.utc).date()
     
     # 1. 获取所有需要复习的单词
     review_progress = (
@@ -53,12 +53,18 @@ def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, A
     )
 
     for entry in new_word_entries:
-        # 为新词创建一个临时的、未保存的 LearningProgress 对象
-        temp_progress = models.LearningProgress(entry_id=entry.id)
+        temp_progress = models.LearningProgress(
+            entry_id=entry.id,
+            mastery_level=0,
+            review_count=0,
+            next_review_at=datetime.datetime.now(datetime.timezone.utc),
+            ease_factor=2.5,
+            interval=0
+        )
         queue.append({
             "entry_id": entry.id,
             "repetitions_left": NEW_WORD_REPETITIONS,
-            "progress": temp_progress 
+            "progress": temp_progress
         })
         
     random.shuffle(queue)
@@ -192,7 +198,7 @@ def update_learning_progress_service_v2(
             progress.ease_factor = 1.3
             
     progress.review_count += 1
-    progress.last_reviewed_at = datetime.datetime.utcnow()
+    progress.last_reviewed_at = datetime.datetime.now(datetime.timezone.utc)
     progress.next_review_at = progress.last_reviewed_at + datetime.timedelta(days=progress.interval)
     
     db.commit()
@@ -235,7 +241,7 @@ def update_learning_progress_service(progress: models.LearningProgress, quality:
             progress.ease_factor = 1.3
             
     progress.review_count += 1
-    progress.last_reviewed_at = datetime.datetime.utcnow()
+    progress.last_reviewed_at = datetime.datetime.now(datetime.timezone.utc)
     progress.next_review_at = progress.last_reviewed_at + datetime.timedelta(days=progress.interval)
     
     db.add(progress)
@@ -248,7 +254,7 @@ def get_learning_session_service(db: Session, limit_new_words: int = 5) -> dict:
     获取学习会话：包括需要复习的单词和新单词
     修复：只返回用户明确添加到学习计划的单词
     """
-    today = datetime.datetime.utcnow()
+    today = datetime.datetime.now(datetime.timezone.utc).date()
     
     # 获取需要复习的单词（用户已添加到学习计划的单词）
     review_words = (
@@ -287,7 +293,7 @@ def add_word_to_learning_service(entry_id: int, db: Session) -> models.LearningP
     # 创建新的学习进度记录
     new_progress = models.LearningProgress(
         entry_id=entry_id,
-        next_review_at=datetime.datetime.utcnow()  # 立即可学习
+        next_review_at=datetime.datetime.now(datetime.timezone.utc)  # 立即可学习
     )
     
     db.add(new_progress)
