@@ -23,48 +23,32 @@ ACTIVE_POOL_SIZE = 7  # 定义"聚焦学习池"的大小，7是个不错的选�
 
 def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, Any]]:
     """
-    生成全新的每日学习队列。
+    【V4.1 - 最终版】
+    - 使用“学习日”（凌晨4点）作为日期判断基准。
+    - 严格只从 learning_progress 表中选取单词。
+    - 根据单词的熟练度动态设置初始重复次数。
     """
-    queue = []
-    today = datetime.datetime.now(datetime.timezone.utc).date()
-    
-    # 1. 获取所有需要复习的单词
+    today = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=4)).date()
+
     review_progress = (
         db.query(models.LearningProgress)
-        .filter(models.LearningProgress.next_review_at <= today)
+        .filter(func.date(models.LearningProgress.next_review_at) <= today)
         .all()
     )
     
+    queue = []
     for progress in review_progress:
+        # 【关键修复】根据熟练度动态设置重复次数
+        repetitions = 1 # 默认为1次
+        if progress.mastery_level <= 1:
+            repetitions = 3 # 生词或刚学的词，重复3次
+        elif progress.mastery_level <= 3:
+            repetitions = 2 # 学习中的词，重复2次
+        
         queue.append({
             "entry_id": progress.entry_id,
-            "repetitions_left": REVIEW_WORD_REPETITIONS,
-            "progress": progress # 附加完整的 progress 对象
-        })
-
-    # 2. 获取新单词
-    learned_entry_ids = {p.entry_id for p in db.query(models.LearningProgress).all()}
-    
-    new_word_entries = (
-        db.query(models.KnowledgeEntry)
-        .filter(models.KnowledgeEntry.id.notin_(learned_entry_ids))
-        .limit(limit_new_words)
-        .all()
-    )
-
-    for entry in new_word_entries:
-        temp_progress = models.LearningProgress(
-            entry_id=entry.id,
-            mastery_level=0,
-            review_count=0,
-            next_review_at=datetime.datetime.now(datetime.timezone.utc),
-            ease_factor=2.5,
-            interval=0
-        )
-        queue.append({
-            "entry_id": entry.id,
-            "repetitions_left": NEW_WORD_REPETITIONS,
-            "progress": temp_progress
+            "repetitions_left": repetitions, 
+            "progress": progress
         })
         
     random.shuffle(queue)
@@ -160,12 +144,13 @@ def update_learning_progress_service_v2(
     if not word_in_queue:
         raise ValueError("单词不在当前学习会话中")
 
-    if quality < 4:
+    if quality < 3:
         # 如果答错了，增加重复次数
         word_in_queue["repetitions_left"] += FAILED_WORD_REPETITIONS
-    else:
-        # 答对了，减少一次
+    elif quality < 4:
         word_in_queue["repetitions_left"] = max(0, word_in_queue["repetitions_left"] - 1)
+    else:
+        word_in_queue["repetitions_left"] = max(0, word_in_queue["repetitions_left"] - 2)
         
     # 2. 更新数据库中的核心 SRS 数据
     progress = (
@@ -197,8 +182,9 @@ def update_learning_progress_service_v2(
         if progress.ease_factor < 1.3:
             progress.ease_factor = 1.3
             
+    today = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=4)).date()
     progress.review_count += 1
-    progress.last_reviewed_at = datetime.datetime.now(datetime.timezone.utc)
+    progress.last_reviewed_at = today
     progress.next_review_at = progress.last_reviewed_at + datetime.timedelta(days=progress.interval)
     
     db.commit()
@@ -254,7 +240,7 @@ def get_learning_session_service(db: Session, limit_new_words: int = 5) -> dict:
     获取学习会话：包括需要复习的单词和新单词
     修复：只返回用户明确添加到学习计划的单词
     """
-    today = datetime.datetime.now(datetime.timezone.utc).date()
+    today = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=4)).date()
     
     # 获取需要复习的单词（用户已添加到学习计划的单词）
     review_words = (
