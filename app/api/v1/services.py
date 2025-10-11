@@ -297,6 +297,7 @@ def get_recent_entries_service(db: Session, recent_searches: Deque[str]) -> list
             # 使用缓存的预览
             recent_items.append(
                 RecentItem(
+                    entry_id=entry.id,
                     query_text=entry.query_text,
                     preview=get_cached_preview(entry.analysis_markdown),
                 )
