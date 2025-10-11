@@ -72,9 +72,12 @@ async def create_follow_up_service(
         all_prototypes = db.query(models.KnowledgeEntry.query_text).all()
         vocabulary_list = [item[0] for item in all_prototypes]
 
+        history_str = "\n".join([f"Q: {fu.question}\nA: {fu.answer}" for fu in entry.follow_ups])
+        context_str = f"原始分析:\n{entry.analysis_markdown}\n\n历史问答:\n{history_str}"
+
         system_prompt = llm_router.config.follow_up_prompt.format(
-            original_analysis=entry.analysis_markdown,
-            history="\n".join([f"Q: {fu.question}\nA: {fu.answer}" for fu in entry.follow_ups]),
+            context=context_str,
+            question=request.question, # Pass the question here as well for the prompt
             vocabulary_list=", ".join(vocabulary_list),
         )
 
