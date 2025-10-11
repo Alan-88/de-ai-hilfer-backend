@@ -2,6 +2,7 @@ import datetime
 
 from sqlalchemy import (
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -124,8 +125,8 @@ class LearningProgress(Base):
     # 间隔重复算法核心字段
     mastery_level = Column(Integer, default=0, nullable=False)
     review_count = Column(Integer, default=0, nullable=False)
-    next_review_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
-    last_reviewed_at = Column(DateTime, nullable=True)
+    next_review_at = Column(Date, nullable=False, default=datetime.date.today, index=True)
+    last_reviewed_at = Column(Date, nullable=True)
     ease_factor = Column(Float, default=2.5, nullable=False)
     interval = Column(Integer, default=0, nullable=False) # 单位：天
 

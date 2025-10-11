@@ -20,11 +20,11 @@ _daily_learning_session: Dict[str, Any] = {
 
 def get_daily_learning_session() -> Dict[str, Any]:
     """FastAPI dependency to get the daily learning session queue."""
-    today = datetime.date.today().isoformat()
+    today = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=4)).date().isoformat()
     # 如果日期不是今天，就清空队列，强制重新生成
     if _daily_learning_session["date"] != today:
         _daily_learning_session["date"] = today
         _daily_learning_session["queue"] = []
         _daily_learning_session["initial_count"] = 0
-        _daily_learning_session["last_shown_entry_id"] = None  # 在重置时也清空
+        _daily_learning_session["last_shown_entry_id"] = None
     return _daily_learning_session

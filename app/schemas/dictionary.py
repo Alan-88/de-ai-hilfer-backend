@@ -1,6 +1,7 @@
 from enum import Enum
 from typing import List, Literal, Union, Optional
 import datetime
+from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -209,8 +210,8 @@ class LearningProgressResponse(BaseModel):
     """学习进度的数据模型"""
     mastery_level: int
     review_count: int
-    next_review_at: datetime.datetime
-    last_reviewed_at: Optional[datetime.datetime] = None
+    next_review_at: date
+    last_reviewed_at: Optional[date] = None
     ease_factor: float
     interval: int
     model_config = ConfigDict(from_attributes=True)
