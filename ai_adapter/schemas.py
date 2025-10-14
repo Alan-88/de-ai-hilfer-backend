@@ -79,6 +79,9 @@ class AppConfig(BaseModel):
     spell_checker_prompt: str = Field(..., description="拼写检查提示词模板")
     intelligent_search_prompt: str = Field(..., description="智能搜索提示词模板")
     affix_analysis_prompt: str = Field(..., description="词根词缀分析提示词模板")
+    dynamic_example_sentence_prompt: str = Field(..., description="AI动态生成例句提示词模板")
+    dynamic_synonym_quiz_prompt: str = Field(..., description="AI生成同义词辨析选择题提示词模板")
+
 
 
 # --- 消息块模式 ---
