@@ -265,8 +265,12 @@ def update_learning_progress_service_v2(
     return {
         "entry_id": progress.entry_id,
         "mastery_level": progress.mastery_level,
-        "next_review_at": progress.next_review_at.isoformat(),
-        "daily_stats": stats # 把当日的详细情况也返回
+        "review_count": progress.review_count,
+        "next_review_at": progress.next_review_at,
+        "last_reviewed_at": progress.last_reviewed_at,
+        "ease_factor": progress.ease_factor,
+        "interval": progress.interval,
+        "daily_stats": stats
     }
 
 # ==============================================================================
