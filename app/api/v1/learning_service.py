@@ -124,8 +124,19 @@ def get_learning_session_service_v2(
     ]
 
     if not active_queue:
-        daily_session.clear() # 清空会话
-        return { "current_word": None, "completed_count": daily_session.get("initial_count", 0), "total_count": daily_session.get("initial_count", 0), "is_completed": True }
+        # 【核心修复】不再使用 daily_session.clear()
+        # 只重置与队列相关的状态，保留 "date" 键
+        daily_session["queue"] = []
+        daily_session["word_stats"] = {}
+        daily_session["initial_count"] = 0
+        daily_session["last_shown_entry_id"] = None
+        
+        return { 
+            "current_word": None, 
+            "completed_count": daily_session.get("initial_count", 0), # 这里会是0
+            "total_count": daily_session.get("initial_count", 0), # 这里会是0
+            "is_completed": True 
+        }
 
     last_id = daily_session.get("last_shown_entry_id")
     candidate_pool = [word for word in active_queue if word["entry_id"] != last_id]
@@ -212,8 +223,8 @@ def update_learning_progress_service_v2(
         task_completed = True
         stats['mastery_score'] = GRADUATION_THRESHOLD # 将分数补足，确保逻辑一致
     
-    # 规则 2: 正常毕业 - 积分达到门槛
-    elif stats['mastery_score'] >= GRADUATION_THRESHOLD:
+    # 规则 2: 正常毕业 - 【增加限制】必须是第二次或以上的复习，且积分达标
+    elif stats['repetitions'] > 1 and stats['mastery_score'] >= GRADUATION_THRESHOLD:
         task_completed = True
         
     # 规则 3: 强制毕业 - 达到上限
