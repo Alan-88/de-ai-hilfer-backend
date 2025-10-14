@@ -183,9 +183,8 @@ def update_learning_progress_service_v2(
     daily_session: Dict[str, Any]
 ):
     """
-    【V3 - 最终版】更新学习进度，采用二元记忆方案。
+    【V3.1 - 最终版】引入“快速通道”逻辑并修复了返回类型
     """
-    # --- 1. 初始化 & 更新当日会话数据 ---
     stats = daily_session.setdefault('word_stats', {}).setdefault(entry_id, {
         "qualities": [], "repetitions": 0, "completed_today": False, 
         "mastery_score": 0, "is_difficult": False
@@ -193,7 +192,6 @@ def update_learning_progress_service_v2(
     stats['qualities'].append(quality)
     stats['repetitions'] += 1
     
-    # --- 2. 当日任务管理器：计算“当日掌握积分” ---
     score_change = 0
     if stats['is_difficult']:
         score_change = DIFFICULTY_DISCOUNT_MAP.get(quality, QUALITY_SCORE_MAP.get(quality, 0))
@@ -201,21 +199,29 @@ def update_learning_progress_service_v2(
         score_change = QUALITY_SCORE_MAP.get(quality, 0)
     stats['mastery_score'] = max(0, stats['mastery_score'] + score_change)
 
-    # --- 3. 当日任务管理器：应用“初见宽容” & 更新困难词状态 ---
     if not stats['is_difficult'] and quality < 3:
         fail_count = sum(1 for q in stats['qualities'] if q < 3)
         if fail_count > 1:
             stats['is_difficult'] = True
 
-    # --- 4. 当日任务管理器：判断当日任务是否完成 ---
+    # --- 【核心修复】当日任务完成判断逻辑 ---
     task_completed = False
-    if stats['mastery_score'] >= GRADUATION_THRESHOLD:
+    
+    # 规则 1: 快速通道 - 如果是当日第一次学习，且评价为“完美回忆”，则直接毕业
+    if stats['repetitions'] == 1 and quality == 5:
         task_completed = True
+        stats['mastery_score'] = GRADUATION_THRESHOLD # 将分数补足，确保逻辑一致
+    
+    # 规则 2: 正常毕业 - 积分达到门槛
+    elif stats['mastery_score'] >= GRADUATION_THRESHOLD:
+        task_completed = True
+        
+    # 规则 3: 强制毕业 - 达到上限
     elif stats['repetitions'] >= MAX_DAILY_REPS:
         task_completed = True
+        
     stats['completed_today'] = task_completed
 
-    # --- 5. 获取或创建数据库对象 ---
     progress = db.query(models.LearningProgress).filter_by(entry_id=entry_id).first()
     if not progress:
         progress = models.LearningProgress(entry_id=entry_id, ease_factor=2.5)
@@ -223,7 +229,6 @@ def update_learning_progress_service_v2(
 
     today = get_learning_day() # 【修复 4】统一日期计算
 
-    # --- 6. 长线重复调度器：如果任务完成，则规划未来 ---
     if task_completed:
         final_quality = calculate_weighted_quality(stats['qualities'])
         
@@ -253,7 +258,6 @@ def update_learning_progress_service_v2(
     else:
         progress.next_review_at = today
     
-    # --- 7. 收尾工作 ---
     progress.last_reviewed_at = today
     if progress.review_count is None:
         progress.review_count = 0
@@ -261,7 +265,6 @@ def update_learning_progress_service_v2(
     db.commit()
     db.refresh(progress)
 
-    # 返回当日统计数据，与你现有的前端更兼容
     return {
         "entry_id": progress.entry_id,
         "mastery_level": progress.mastery_level,
@@ -381,7 +384,7 @@ def get_word_insight_service(entry_id: int, db: Session) -> Optional[str]:
 
 async def generate_dynamic_example_service(entry_id: int, llm_router: LLMRouter, db: Session) -> dict:
     """
-    AI动态生成例句
+    AI动态生成例句 (已修复JSON解析问题)
     """
     entry = db.query(models.KnowledgeEntry).filter(models.KnowledgeEntry.id == entry_id).first()
     if not entry:
@@ -391,21 +394,28 @@ async def generate_dynamic_example_service(entry_id: int, llm_router: LLMRouter,
     response_text = await call_llm_service(llm_router, prompt, entry.query_text)
     
     try:
-        result = json.loads(response_text)
+        # 【核心修复】从Markdown代码块中提取纯JSON
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            json_str = response_text # 如果没有Markdown，则假定为纯JSON
+        
+        result = json.loads(json_str)
         return result
     except json.JSONDecodeError:
-        raise ValueError("AI返回的例句格式错误")
+        # 捕获原始文本以帮助调试
+        raise ValueError(f"AI返回的例句格式错误, 原始返回: {response_text}")
 
 
 async def generate_synonym_quiz_service(entry_id: int, llm_router: LLMRouter, db: Session) -> dict:
     """
-    AI生成同义词辨析选择题
+    AI生成同义词辨析选择题 (已修复JSON解析问题)
     """
     entry = db.query(models.KnowledgeEntry).filter(models.KnowledgeEntry.id == entry_id).first()
     if not entry:
         raise ValueError("单词不存在")
     
-    # 提取核心释义用于出题
     core_meaning_pattern = r"\*\s*\*\*[nv\./adj\.]*\*\*\s*\*\*(.*?)\*\*"
     meaning_match = re.search(core_meaning_pattern, entry.analysis_markdown, re.IGNORECASE)
     core_meaning = meaning_match.group(1).strip() if meaning_match else entry.query_text
@@ -416,7 +426,14 @@ async def generate_synonym_quiz_service(entry_id: int, llm_router: LLMRouter, db
     response_text = await call_llm_service(llm_router, prompt)
     
     try:
-        result = json.loads(response_text)
+        # 【核心修复】从Markdown代码块中提取纯JSON
+        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
+        if json_match:
+            json_str = json_match.group(1)
+        else:
+            json_str = response_text
+            
+        result = json.loads(json_str)
         return result
     except json.JSONDecodeError:
-        raise ValueError("AI返回的题目格式错误")
+        raise ValueError(f"AI返回的题目格式错误, 原始返回: {response_text}")
