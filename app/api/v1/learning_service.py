@@ -384,7 +384,7 @@ def get_word_insight_service(entry_id: int, db: Session) -> Optional[str]:
 
 async def generate_dynamic_example_service(entry_id: int, llm_router: LLMRouter, db: Session) -> dict:
     """
-    AI动态生成例句 (已修复JSON解析问题)
+    AI动态生成例句 (已增加诊断日志和修复)
     """
     entry = db.query(models.KnowledgeEntry).filter(models.KnowledgeEntry.id == entry_id).first()
     if not entry:
@@ -393,24 +393,27 @@ async def generate_dynamic_example_service(entry_id: int, llm_router: LLMRouter,
     prompt = llm_router.config.dynamic_example_sentence_prompt
     response_text = await call_llm_service(llm_router, prompt, entry.query_text)
     
+    # --- 【诊断日志】 ---
+    print("--- RAW LLM RESPONSE (generate_dynamic_example_service) ---")
+    print(response_text)
+    print("---------------------------------------------------------")
+    
     try:
-        # 【核心修复】从Markdown代码块中提取纯JSON
         json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
         if json_match:
             json_str = json_match.group(1)
         else:
-            json_str = response_text # 如果没有Markdown，则假定为纯JSON
+            json_str = response_text
         
         result = json.loads(json_str)
         return result
     except json.JSONDecodeError:
-        # 捕获原始文本以帮助调试
         raise ValueError(f"AI返回的例句格式错误, 原始返回: {response_text}")
 
 
 async def generate_synonym_quiz_service(entry_id: int, llm_router: LLMRouter, db: Session) -> dict:
     """
-    AI生成同义词辨析选择题 (已修复JSON解析问题)
+    AI生成同义词辨析选择题 (已增加诊断日志和修复)
     """
     entry = db.query(models.KnowledgeEntry).filter(models.KnowledgeEntry.id == entry_id).first()
     if not entry:
@@ -424,9 +427,13 @@ async def generate_synonym_quiz_service(entry_id: int, llm_router: LLMRouter, db
     
     prompt = llm_router.config.dynamic_synonym_quiz_prompt.format(word_details=word_details)
     response_text = await call_llm_service(llm_router, prompt)
+
+    # --- 【诊断日志】 ---
+    print("--- RAW LLM RESPONSE (generate_synonym_quiz_service) ---")
+    print(response_text)
+    print("------------------------------------------------------")
     
     try:
-        # 【核心修复】从Markdown代码块中提取纯JSON
         json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text)
         if json_match:
             json_str = json_match.group(1)
