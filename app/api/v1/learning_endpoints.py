@@ -5,7 +5,7 @@
 import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -388,7 +388,7 @@ def get_learning_session_v2(
 @router.post("/review/v2/{entry_id}", response_model=LearningProgressResponse, tags=["Learning V2"])
 def submit_review_result_v2(
     entry_id: int,
-    quality: int,
+    quality: int = Body(..., embed=True),
     db: Session = Depends(get_db),
     daily_session: Dict[str, Any] = Depends(get_daily_learning_session)
 ):
