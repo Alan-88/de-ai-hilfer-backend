@@ -424,9 +424,8 @@ async def generate_synonym_quiz_service(entry_id: int, llm_router: LLMRouter, db
     core_meaning = meaning_match.group(1).strip() if meaning_match else entry.query_text
     
     word_details = f"单词: {entry.query_text}\n核心释义: {core_meaning}"
-    
-    prompt = llm_router.config.dynamic_synonym_quiz_prompt.format(word_details=word_details)
-    response_text = await call_llm_service(llm_router, prompt)
+    prompt = llm_router.config.dynamic_synonym_quiz_prompt
+    response_text = await call_llm_service(llm_router, prompt, word_details)
 
     # --- 【诊断日志】 ---
     print("--- RAW LLM RESPONSE (generate_synonym_quiz_service) ---")
