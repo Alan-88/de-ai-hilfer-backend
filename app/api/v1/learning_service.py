@@ -145,11 +145,21 @@ def get_learning_session_service_v2(
         daily_session["queue"] = [w for w in daily_session["queue"] if w["entry_id"] != current_word_data["entry_id"]]
         return get_learning_session_service_v2(db, daily_session, limit_new_words)
 
-    # 【修复 3】返回数据结构
+    # --- 【核心修复】---
+    # 重新获取 progress 和当日统计数据，以构建完整的前端对象
+    progress = db.query(models.LearningProgress).filter_by(entry_id=entry.id).first()
+    stats = daily_session.get("word_stats", {}).get(entry.id, {"repetitions": 0})
+    
+    # 估算一个 repetitions_left 用于显示
+    # 例如：如果一个词需要10分毕业，当前2分，大概还需要(10-2)/4=2次左右
+    estimated_reps_left = max(1, round((GRADUATION_THRESHOLD - stats.get("mastery_score", 0)) / 4))
+
     current_word_for_frontend = {
         "entry_id": entry.id,
         "query_text": entry.query_text,
-        "analysis_markdown": entry.analysis_markdown
+        "analysis_markdown": entry.analysis_markdown,
+        "repetitions_left": estimated_reps_left, # 修复：添加估算的剩余次数
+        "progress": progress # 修复：添加 progress 对象
     }
     
     completed_count = daily_session["initial_count"] - len(active_queue)
