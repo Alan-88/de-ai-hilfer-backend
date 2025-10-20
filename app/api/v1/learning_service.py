@@ -68,36 +68,19 @@ def _generate_daily_queue(db: Session, limit_new_words: int) -> List[Dict[str, A
     """
     today = get_learning_day()
 
-    # 1. 获取到期复习的单词
+    # 1. 获取所有已加入学习计划且今天到期的单词
     review_progress = (
         db.query(models.LearningProgress)
         .filter(cast(models.LearningProgress.next_review_at, Date) <= today)
         .all()
     )
-
-    # 2. 获取尚未学习的新词
-    new_word_ids_in_progress = {p.entry_id for p in review_progress}
-    num_new_words_needed = limit_new_words
     
-    new_entries = []
-    if num_new_words_needed > 0:
-         new_entries = (
-            db.query(models.KnowledgeEntry)  # 【修复 1】模型名称: KnowledgeEntry
-            .outerjoin(models.LearningProgress, models.KnowledgeEntry.id == models.LearningProgress.entry_id)
-            .filter(models.LearningProgress.entry_id.is_(None)) # 【修复 2】查询语法: .is_(None)
-            .limit(num_new_words_needed)
-            .all()
-        )
-
+    # 2. 【核心修改】不再自动获取任何新词。队列只应包含用户添加过的词。
+    
     queue = []
-    # 添加复习单词到队列
+    # 只将到期的单词添加到队列
     for progress in review_progress:
         queue.append({"entry_id": progress.entry_id})
-
-    # 添加新单词到队列
-    for entry in new_entries:
-        if entry.id not in new_word_ids_in_progress:
-             queue.append({"entry_id": entry.id}) # 【修复 1】字段名: entry.id
         
     random.shuffle(queue)
     return queue
